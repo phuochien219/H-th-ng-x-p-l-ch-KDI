@@ -69,55 +69,64 @@ function publicUser_(user) {
 
 /* ------------------------------- Tiện ích ------------------------------- */
 
+var CONTEXT_TABLES = ['subjects', 'schools', 'classes', 'teachers', 'training', 'assistants', 'assistantFree', 'links', 'unavailability', 'distances', 'lessons'];
+
 function loadAll_() {
-  return {
-    subjects: Db.read('subjects'), schools: Db.read('schools'), teachers: Db.read('teachers'),
-    links: Db.read('links'), unavailability: Db.read('unavailability'), lessons: Db.read('lessons'),
-  };
+  var data = {};
+  CONTEXT_TABLES.forEach(function (t) { data[t] = Db.read(t); });
+  return data;
 }
 
 function context_() {
   return buildContext(loadAll_(), getSettings_());
 }
 
+function personName_(ctx, code) {
+  var p = ctx.people[code];
+  return p ? p.name : (code ? code + ' (?)' : '');
+}
+
 function lessonDto_(ctx, l, cidx) {
   var s = ctx.schools[l.school];
-  var t = ctx.teachers[l.teacher];
   var subj = ctx.subjects[l.subject];
   return {
     id: l.id, school: l.school, schoolName: s ? s.name : l.school, district: s ? s.district : '',
     weekday: l.weekday, weekdayLabel: weekdayLabel(l.weekday), start: l.start, end: l.end,
     startText: fmtTime(l.start), endText: fmtTime(l.end), className: l.className, grade: l.grade,
-    subject: l.subject, subjectName: subj ? subj.name : l.subject, color: subj ? subj.color : '',
-    periods: l.periods, room: l.room, teacher: l.teacher, teacherName: t ? t.name : (l.teacher ? l.teacher + ' (?)' : ''),
-    locked: l.locked, source: l.source, explain: l.explain, notes: l.notes, load: round1(l.load),
+    subject: l.subject, subjectName: subj ? subj.name : l.subject, color: subj ? subj.color : '', subjectFromClass: l.subjectFromClass,
+    periods: l.periods, room: l.room, teacher: l.teacher, teacherName: personName_(ctx, l.teacher),
+    needTeacher: l.needTeacher, needTeacherRaw: l.needTeacherRaw || '', needAssistant: l.needAssistant, needAssistantRaw: l.needRaw || '', assistant: l.assistant, assistantName: personName_(ctx, l.assistant),
+    locked: l.locked, source: l.source, explain: l.explain, explainTA: l.explainTA || '', notes: l.notes, load: round1(l.load),
     invalid: l.invalid, conflict: cidx ? (cidx[l.id] || '') : '',
   };
 }
 
 function teacherInfo_(ctx, t, user) {
   var o = {
-    code: t.code, name: t.name, type: t.typeLabel, rating: t.rating, district: t.district,
+    code: t.code, role: t.role, roleLabel: STAFF_ROLES[t.role].label, name: t.name, type: t.typeLabel, rating: t.rating, district: t.district,
     subjects: t.subjects.map(function (c) { return { code: c, name: subjectName_(ctx, c) }; }),
     target: t.target, max: t.max, maxSchools: t.maxSchools, active: t.active,
   };
-  if (hasPerm(user, 'view_personal')) {
-    var raw = Db.findByKey('teachers', t.code) || {};
+  if (hasPerm(user, 'view_personal') || (user.teacherCode && user.teacherCode === t.code)) {
+    var raw = Db.findByKey(STAFF_ROLES[t.role].pool, t.code) || {};
     o.email = raw.email || '';
     o.phone = raw.phone || '';
     o.address = raw.address || '';
+    o.mapUrl = raw.mapUrl || (hasCoords_(t) ? mapsUrlFromCoords(t.lat, t.lng) : '');
     o.notes = raw.notes || '';
   }
   return o;
 }
 
+/** Lịch của 1 người (GV hoặc trợ giảng). */
 function teacherSchedule_(ctx, code, user) {
   code = str(code).toUpperCase();
-  var t = ctx.teachers[code];
-  if (!t) throw userError_('Không tìm thấy giáo viên ' + code);
+  var t = ctx.people[code];
+  if (!t) throw userError_('Không tìm thấy giáo viên / trợ giảng ' + code);
+  var field = STAFF_ROLES[t.role].field;
   var conflicts = detectConflicts(ctx).filter(function (c) { return c.teacher === code; });
   var cidx = conflictIndex(conflicts);
-  var lessons = ctx.lessonList.filter(function (l) { return !l.invalid && l.teacher === code; })
+  var lessons = ctx.lessonList.filter(function (l) { return !l.invalid && l[field] === code; })
     .sort(function (a, b) { return a.weekday - b.weekday || a.start - b.start; });
   var personal = hasPerm(user, 'view_personal');
   var bySchool = {};
@@ -130,7 +139,11 @@ function teacherSchedule_(ctx, code, user) {
     var e = bySchool[k];
     e.hours = round1(e.hours);
     e.priority = isPriority_(ctx, code, k);
-    if (personal) e.distance = teacherSchoolDistance(ctx, code, k).km;
+    if (personal) {
+      var d = teacherSchoolDistance(ctx, code, k);
+      e.distance = d.km;
+      e.distanceSource = d.source;
+    }
     return e;
   });
   var load = lessons.reduce(function (s, l) { return s + l.load; }, 0);
@@ -138,13 +151,19 @@ function teacherSchedule_(ctx, code, user) {
     teacher: teacherInfo_(ctx, t, user),
     lessons: lessons.map(function (l) { return lessonDto_(ctx, l, cidx); }),
     load: round1(load), schools: schools, conflicts: conflicts,
-    unavailable: [],
+    unavailable: [], free: null,
   };
   t.unavailable.forEach(function (list, wd) {
     list.forEach(function (u) {
       out.unavailable.push({ weekday: wd, weekdayLabel: weekdayLabel(wd), start: u.start, end: u.end, startText: fmtTime(u.start), endText: fmtTime(u.end), reason: personal ? u.reason : '' });
     });
   });
+  if (t.free) {
+    out.free = [];
+    t.free.forEach(function (list, wd) {
+      list.forEach(function (f) { out.free.push({ weekday: wd, weekdayLabel: weekdayLabel(wd), start: f.start, end: f.end, startText: fmtTime(f.start), endText: fmtTime(f.end) }); });
+    });
+  }
   if (personal) {
     out.priorityLinks = Object.keys(ctx.links).filter(function (k) { return k.indexOf(code + '|') === 0 && ctx.links[k].preference; })
       .map(function (k) {
@@ -154,7 +173,7 @@ function teacherSchedule_(ctx, code, user) {
     out.nearestSchools = Object.keys(ctx.schools).filter(function (sc) { return ctx.schools[sc].active; })
       .map(function (sc) {
         var d = teacherSchoolDistance(ctx, code, sc);
-        return { school: sc, name: ctx.schools[sc].name, district: ctx.schools[sc].district, distance: d.km, source: d.source, priority: isPriority_(ctx, code, sc) };
+        return { school: sc, name: ctx.schools[sc].name, district: ctx.schools[sc].district, distance: d.km, source: d.source, minutes: d.minutes || null, priority: isPriority_(ctx, code, sc) };
       })
       .filter(function (x) { return x.distance !== null; })
       .sort(function (a, b) { return a.distance - b.distance; }).slice(0, 8);
@@ -170,23 +189,35 @@ function schoolSchedule_(ctx, code, user) {
   var cidx = conflictIndex(conflicts);
   var lessons = ctx.lessonList.filter(function (l) { return l.school === code; })
     .sort(function (a, b) { return a.weekday - b.weekday || a.start - b.start || (a.className < b.className ? -1 : 1); });
-  var teachers = {};
-  lessons.forEach(function (l) {
-    if (!l.teacher) return;
-    var t = ctx.teachers[l.teacher];
-    var e = teachers[l.teacher] = teachers[l.teacher] || { code: l.teacher, name: t ? t.name : l.teacher, type: t ? t.typeLabel : '', lessons: 0, hours: 0 };
-    e.lessons++;
-    e.hours += l.load;
+  function staff(field) {
+    var map = {};
+    lessons.forEach(function (l) {
+      var c = l[field];
+      if (!c) return;
+      var p = ctx.people[c];
+      var e = map[c] = map[c] || { code: c, name: p ? p.name : c, type: p ? p.typeLabel : '', lessons: 0, hours: 0 };
+      e.lessons++;
+      e.hours += l.load;
+    });
+    return Object.keys(map).map(function (k) { map[k].hours = round1(map[k].hours); return map[k]; });
+  }
+  var classes = Object.keys(ctx.classes).filter(function (k) { return k.indexOf(code + '|') === 0; }).map(function (k) {
+    var c = ctx.classes[k];
+    return { className: k.split('|')[1], grade: c.grade, subject: c.subject, subjectName: subjectName_(ctx, c.subject), needAssistant: c.needAssistant, needTeacher: c.needTeacher };
   });
   var raw = Db.findByKey('schools', code) || {};
   return {
     school: {
       code: s.code, name: s.name, district: s.district, level: raw.level || '', address: raw.address || '',
+      mapUrl: raw.mapUrl || (hasCoords_(s) ? mapsUrlFromCoords(s.lat, s.lng) : ''),
       contact: raw.contact || '', phone: raw.phone || '', sale: raw.sale || '', notes: raw.notes || '', active: s.active,
     },
     lessons: lessons.map(function (l) { return lessonDto_(ctx, l, cidx); }),
-    teachers: Object.keys(teachers).map(function (k) { teachers[k].hours = round1(teachers[k].hours); return teachers[k]; }),
-    unassigned: lessons.filter(function (l) { return !l.invalid && !l.teacher; }).length,
+    teachers: staff('teacher'),
+    assistants: staff('assistant'),
+    classes: classes,
+    unassigned: lessons.filter(function (l) { return !l.invalid && l.needTeacher && !l.teacher; }).length,
+    missingTA: lessons.filter(function (l) { return !l.invalid && l.needAssistant && !l.assistant; }).length,
     conflicts: conflicts.filter(function (c) {
       return (c.lessons || []).some(function (id) { return ctx.lessons[id] && ctx.lessons[id].school === code; });
     }),
@@ -199,7 +230,7 @@ function schoolSchedule_(ctx, code, user) {
 function normalizeLessonInput_(ctx, input) {
   var school = str(input.school).toUpperCase();
   if (!ctx.schools[school]) return { error: 'Mã trường "' + school + '" không tồn tại' };
-  var wd = typeof input.weekday === 'number' && input.weekday >= 0 && input.weekday <= 6 && input.weekdayIndex ? input.weekday : parseWeekday(input.weekday);
+  var wd = parseWeekday(input.weekday);
   if (wd < 0) return { error: 'Thứ "' + input.weekday + '" không hợp lệ' };
   var start = parseTime(input.start);
   var end = parseTime(input.end);
@@ -207,18 +238,25 @@ function normalizeLessonInput_(ctx, input) {
   if (end === null) return { error: 'Giờ kết thúc "' + input.end + '" không hợp lệ' };
   if (end <= start) return { error: 'Giờ kết thúc phải sau giờ bắt đầu' };
   var subject = str(input.subject).toUpperCase();
-  if (!subject) return { error: 'Thiếu mã môn' };
-  if (!ctx.subjects[subject]) {
+  var cls = ctx.classes[school + '|' + str(input.className).toUpperCase()];
+  if (!subject && !cls) return { error: 'Thiếu chương trình/môn: lớp "' + str(input.className) + '" chưa khai báo trong sheet LopHoc, hãy ghi Mã môn' };
+  if (subject && !ctx.subjects[subject]) {
     var found = findSubjectByName_(ctx, input.subject);
     if (!found) return { error: 'Môn "' + input.subject + '" không có trong danh mục môn học (dùng mã môn hoặc tên môn)' };
     subject = found;
   }
   var periods = toNum(input.periods);
+  var need = str(input.needAssistant);
+  if (need) {
+    var n = removeDiacritics_(need).toLowerCase();
+    need = /^(co|x|true|1|yes)$/.test(n) ? 'Có' : /^(khong|false|0|no)$/.test(n) ? 'Không' : '';
+  }
   return {
     obj: {
       school: school, weekday: weekdayLabel(wd), start: fmtTime(start), end: fmtTime(end),
-      className: str(input.className), grade: str(input.grade), subject: subject,
-      periods: periods === null ? 1 : periods, room: str(input.room), notes: str(input.notes),
+      className: str(input.className), grade: str(input.grade) || (cls ? cls.grade : ''), subject: subject,
+      periods: periods === null ? 1 : periods, room: str(input.room), notes: str(input.notes), needAssistant: need,
+      needTeacher: str(input.needTeacher) ? (yesNo_(input.needTeacher, true) ? 'Có' : 'Không') : '',
     },
   };
 }
@@ -254,6 +292,13 @@ function saveLesson_(args, user) {
       obj.source = wantTeacher ? 'Thủ công' : '';
       obj.explain = '';
     }
+    var wantTA = 'assistant' in input ? str(input.assistant).toUpperCase() : (existing ? existing.assistant : '');
+    if (wantTA !== (existing ? existing.assistant : '')) {
+      if (!hasPerm(user, 'assign')) throw userError_('Bạn không có quyền phân công trợ giảng.', 'FORBIDDEN');
+      if (wantTA && !ctx.assistants[wantTA]) throw userError_('Mã trợ giảng "' + wantTA + '" không tồn tại');
+      obj.assistant = wantTA;
+      obj.explainTA = '';
+    }
     if ('locked' in input && hasPerm(user, 'assign')) obj.locked = !!input.locked;
     if (existing) {
       obj._row = existing.row;
@@ -263,6 +308,7 @@ function saveLesson_(args, user) {
       id = nextIds_('lessons', 'TKB', 1)[0];
       obj.id = id;
       if (!('teacher' in obj)) obj.teacher = '';
+      if (!('assistant' in obj)) obj.assistant = '';
       if (!('locked' in obj)) obj.locked = false;
       Db.append('lessons', [obj]);
       audit_(user, 'Thêm tiết', id, obj);
@@ -276,8 +322,9 @@ function lessonWarnings_(id) {
   Db.clearCache();
   var ctx = context_();
   return detectConflicts(ctx).filter(function (c) {
+    var l = ctx.lessons[id];
     return (c.lessons || []).indexOf(id) >= 0 ||
-      (ctx.lessons[id] && ctx.lessons[id].teacher && c.teacher === ctx.lessons[id].teacher && !(c.lessons || []).length);
+      (l && !(c.lessons || []).length && c.teacher && (c.teacher === l.teacher || c.teacher === l.assistant));
   }).map(function (c) { return { severity: c.severity, label: c.label, message: c.message }; });
 }
 
@@ -327,24 +374,30 @@ function deleteLessons_(args, user) {
   });
 }
 
+/** Gán / bỏ gán GV (role 'teacher') hoặc trợ giảng (role 'assistant') cho 1 tiết. */
 function assignLesson_(args, user) {
+  var role = roleOf_(args.role);
+  var R = STAFF_ROLES[role];
   return withLock_(function () {
     var ctx = context_();
     var id = str(args.id);
     var l = ctx.lessons[id];
     if (!l) throw userError_('Không tìm thấy tiết ' + id);
-    var code = str(args.teacher).toUpperCase();
+    var code = str(args[R.field] !== undefined ? args[R.field] : args.teacher).toUpperCase();
     var explain = '';
     if (code) {
-      var t = ctx.teachers[code];
-      if (!t) throw userError_('Mã GV "' + code + '" không tồn tại');
-      var st = stateFromAssignments(ctx, id);
+      var t = poolOf_(ctx, role)[code];
+      if (!t) throw userError_('Mã ' + R.short + ' "' + code + '" không tồn tại');
+      var st = stateFromAssignments(ctx, id, role);
       explain = 'Gán tay. ' + explainText(scoreCandidate(ctx, st, t, l));
     }
-    var patch = { _row: l.row, teacher: code, source: code ? 'Thủ công' : '', explain: explain, updatedAt: nowString(), updatedBy: user.email };
+    var patch = { _row: l.row, updatedAt: nowString(), updatedBy: user.email };
+    patch[R.field] = code;
+    if (role === 'teacher') { patch.source = code ? 'Thủ công' : ''; patch.explain = explain; }
+    else patch.explainTA = explain;
     if ('locked' in args) patch.locked = !!args.locked;
     Db.update('lessons', [patch]);
-    audit_(user, code ? 'Gán GV' : 'Bỏ gán GV', id, (l.teacher || '–') + ' → ' + (code || '–'));
+    audit_(user, (code ? 'Gán ' : 'Bỏ gán ') + R.short, id, (l[R.field] || '–') + ' → ' + (code || '–'));
     return { id: id, warnings: code ? lessonWarnings_(id) : [] };
   });
 }
@@ -364,26 +417,39 @@ function lockLessons_(args, user) {
 
 var RUN_STATUS = { preview: 'Xem trước', applied: 'Đã áp dụng', reverted: 'Đã hoàn tác', discarded: 'Đã hủy' };
 
+/** args: { mode, schools, roles: ['teacher', 'assistant'] } */
 function runAuto_(args, user) {
+  var roles = (args.roles && args.roles.length ? args.roles : ['teacher', 'assistant']).filter(function (r) { return STAFF_ROLES[r]; });
+  if (!roles.length) throw userError_('Chọn ít nhất 1 nhóm cần xếp (GV hoặc trợ giảng).');
   return withLock_(function () {
     var ctx = context_();
     var t0 = Date.now();
-    var result = runAutoSchedule(ctx, { mode: args.mode, schools: args.schools });
-    var ms = Date.now() - t0;
     var id = 'RUN-' + Utilities.formatDate(new Date(), APP.TIMEZONE, 'yyyyMMdd-HHmmss');
-    var summary = {
-      stats: result.stats, ms: ms, scope: args.schools && args.schools.length ? args.schools : 'all',
-      loads: result.loads.map(function (l) { return [l.teacher, l.load, l.target, l.max, l.schools.length]; }),
-    };
-    Db.append('runs', [{ id: id, createdAt: nowString(), createdBy: user.email, mode: result.mode === 'rebuild' ? 'Xếp lại toàn bộ' : 'Điền tiết trống', status: RUN_STATUS.preview, summary: JSON.stringify(summary) }]);
-    var items = result.proposals.map(function (p) {
-      return { runId: id, lessonId: p.lessonId, before: p.before, after: p.teacher, score: p.score, explain: p.explain };
-    }).concat(result.unassigned.map(function (u) {
-      return { runId: id, lessonId: u.lessonId, before: u.before, after: '', score: '', explain: u.reason };
-    }));
+    var items = [];
+    var byRole = {};
+    var loads = [];
+    var mode = args.mode === 'rebuild' ? 'rebuild' : 'fill';
+    roles.forEach(function (role) {
+      var result = runAutoSchedule(ctx, { role: role, mode: mode, schools: args.schools });
+      byRole[role] = result.stats;
+      result.loads.forEach(function (l) { loads.push([l.teacher, l.load, l.target, l.max, l.schools.length, role]); });
+      result.proposals.forEach(function (p) {
+        items.push({ runId: id, lessonId: p.lessonId, role: role, before: p.before, after: p.teacher, score: p.score, explain: p.explain });
+      });
+      result.unassigned.forEach(function (u) {
+        items.push({ runId: id, lessonId: u.lessonId, role: role, before: u.before, after: '', score: '', explain: u.reason });
+      });
+    });
+    var stats = {};
+    Object.keys(byRole).forEach(function (r) {
+      Object.keys(byRole[r]).forEach(function (k) { stats[k] = (stats[k] || 0) + byRole[r][k]; });
+    });
+    var summary = { stats: stats, byRole: byRole, roles: roles, ms: Date.now() - t0, scope: args.schools && args.schools.length ? args.schools : 'all', loads: loads };
+    var modeLabel = (mode === 'rebuild' ? 'Xếp lại toàn bộ' : 'Điền tiết trống') + ' – ' + roles.map(function (r) { return STAFF_ROLES[r].short; }).join(' + ');
+    Db.append('runs', [{ id: id, createdAt: nowString(), createdBy: user.email, mode: modeLabel, status: RUN_STATUS.preview, summary: JSON.stringify(summary) }]);
     Db.append('runItems', items);
     pruneRuns_();
-    audit_(user, 'Chạy xếp lịch (xem trước)', id, result.stats);
+    audit_(user, 'Chạy xếp lịch (xem trước)', id, byRole);
     return getRun_({ id: id }, user);
   });
 }
@@ -410,20 +476,26 @@ function getRun_(args, user) {
     var dto = l ? lessonDto_(ctx, l, null) : { id: it.lessonId, schoolName: '(tiết đã bị xóa)' };
     var after = str(it.after).toUpperCase();
     var before = str(it.before).toUpperCase();
+    var role = roleOf_(str(it.role) || 'teacher');
     return {
-      lesson: dto, before: before, beforeName: before ? ((ctx.teachers[before] || {}).name || before) : '',
-      after: after, afterName: after ? ((ctx.teachers[after] || {}).name || after) : '',
+      lesson: dto, role: role, roleShort: STAFF_ROLES[role].short,
+      before: before, beforeName: before ? personName_(ctx, before) : '',
+      after: after, afterName: after ? personName_(ctx, after) : '',
       score: it.score, explain: it.explain, assigned: !!after, changed: after !== before,
     };
   });
   var loads = (summary.loads || []).map(function (a) {
-    return { teacher: a[0], name: (ctx.teachers[a[0]] || {}).name || a[0], load: a[1], target: a[2], max: a[3], schools: a[4] };
+    return { teacher: a[0], name: personName_(ctx, a[0]), load: a[1], target: a[2], max: a[3], schools: a[4], role: a[5] || 'teacher' };
   });
   return {
     id: run.id, createdAt: run.createdAt, createdBy: run.createdBy, mode: run.mode, status: run.status,
-    appliedAt: run.appliedAt, appliedBy: run.appliedBy, stats: summary.stats || {}, ms: summary.ms, scope: summary.scope,
-    items: items, loads: loads,
+    appliedAt: run.appliedAt, appliedBy: run.appliedBy, stats: summary.stats || {}, byRole: summary.byRole || null,
+    ms: summary.ms, scope: summary.scope, items: items, loads: loads,
   };
+}
+
+function runItemRole_(it) {
+  return roleOf_(str(it.role) || 'teacher');
 }
 
 function applyRun_(args, user) {
@@ -438,19 +510,23 @@ function applyRun_(args, user) {
     var skipped = 0;
     var now = nowString();
     items.forEach(function (it) {
+      var role = runItemRole_(it);
+      var field = STAFF_ROLES[role].field;
       var l = lessons[str(it.lessonId)];
       var before = str(it.before).toUpperCase();
-      // Bỏ qua nếu tiết đã bị xóa / ghim / đổi GV sau lúc chạy thử.
-      if (!l || toBool(l.locked) || str(l.teacher).toUpperCase() !== before) { skipped++; return; }
+      // Bỏ qua nếu tiết đã bị xóa / ghim / đổi người sau lúc chạy thử.
+      if (!l || toBool(l.locked) || str(l[field]).toUpperCase() !== before) { skipped++; return; }
       var after = str(it.after).toUpperCase();
-      patches.push({
-        _row: l._row, teacher: after, source: after ? 'Tự động' : '',
-        explain: after ? it.explain : 'Chưa xếp được – ' + it.explain, updatedAt: now, updatedBy: user.email,
-      });
+      var text = after ? it.explain : 'Chưa xếp được – ' + it.explain;
+      var patch = { _row: l._row, updatedAt: now, updatedBy: user.email };
+      patch[field] = after;
+      if (role === 'teacher') { patch.source = after ? 'Tự động' : ''; patch.explain = text; }
+      else patch.explainTA = text;
+      patches.push(patch);
     });
     Db.update('lessons', patches);
     Db.update('runs', [{ _row: run._row, status: RUN_STATUS.applied, appliedAt: now, appliedBy: user.email }]);
-    audit_(user, 'Áp dụng xếp lịch', run.id, 'Cập nhật ' + patches.length + ' tiết, bỏ qua ' + skipped);
+    audit_(user, 'Áp dụng xếp lịch', run.id, 'Cập nhật ' + patches.length + ' phân công, bỏ qua ' + skipped);
     return { applied: patches.length, skipped: skipped };
   });
 }
@@ -467,14 +543,19 @@ function revertRun_(args, user) {
     var skipped = 0;
     var now = nowString();
     items.forEach(function (it) {
+      var role = runItemRole_(it);
+      var field = STAFF_ROLES[role].field;
       var l = lessons[str(it.lessonId)];
-      if (!l || str(l.teacher).toUpperCase() !== str(it.after).toUpperCase()) { skipped++; return; }
+      if (!l || str(l[field]).toUpperCase() !== str(it.after).toUpperCase()) { skipped++; return; }
       var before = str(it.before).toUpperCase();
-      patches.push({ _row: l._row, teacher: before, source: before ? 'Hoàn tác' : '', explain: '', updatedAt: now, updatedBy: user.email });
+      var patch = { _row: l._row, updatedAt: now, updatedBy: user.email };
+      patch[field] = before;
+      if (role === 'teacher') { patch.source = before ? 'Hoàn tác' : ''; patch.explain = ''; } else patch.explainTA = '';
+      patches.push(patch);
     });
     Db.update('lessons', patches);
     Db.update('runs', [{ _row: run._row, status: RUN_STATUS.reverted }]);
-    audit_(user, 'Hoàn tác xếp lịch', run.id, 'Khôi phục ' + patches.length + ' tiết, bỏ qua ' + skipped);
+    audit_(user, 'Hoàn tác xếp lịch', run.id, 'Khôi phục ' + patches.length + ' phân công, bỏ qua ' + skipped);
     return { reverted: patches.length, skipped: skipped };
   });
 }
@@ -502,10 +583,17 @@ function runHistory_() {
 var DATA_TABLES = {
   subjects: { view: 'view_schedule', edit: 'edit_teachers' },
   schools: { view: 'view_schedule', edit: 'edit_schools' },
+  classes: { view: 'view_schedule', edit: 'edit_timetable' },
   teachers: { view: 'view_schedule', edit: 'edit_teachers' },
+  training: { view: 'view_schedule', edit: 'edit_teachers' },
+  assistants: { view: 'view_schedule', edit: 'edit_teachers' },
+  assistantFree: { view: 'view_schedule', edit: 'edit_teachers' },
   links: { view: 'view_personal', edit: 'edit_teachers' },
   unavailability: { view: 'view_personal', edit: 'edit_teachers' },
+  distances: { view: 'view_personal', edit: 'manage_settings' },
 };
+/** Bảng có ID tự sinh: tiền tố ID. */
+var AUTO_ID_PREFIX = { unavailability: 'LB', assistantFree: 'LR' };
 
 function tableMeta_(table, user) {
   var personal = hasPerm(user, 'view_personal');
@@ -528,7 +616,7 @@ function dataList_(args, user) {
   return { table: table, label: TABLES[table].label, key: TABLES[table].key, columns: meta, rows: rows, canEdit: hasPerm(user, conf.edit) };
 }
 
-var CODE_FIELDS = { code: true, teacher: true, school: true, subject: true };
+var CODE_FIELDS = { code: true, teacher: true, school: true, subject: true, assistant: true, person: true };
 
 function dataSave_(args, user) {
   var table = String(args.table);
@@ -539,19 +627,20 @@ function dataSave_(args, user) {
     var rec = normalizeRecord_(table, args.record || {});
     validateRefs_(table, rec);
     var originalKey = str(args.originalKey);
-    var newKey = Db.keyOf(table, Object.assign({}, rec, table === 'unavailability' ? { id: originalKey } : {}));
+    var autoId = AUTO_ID_PREFIX[table];
+    var newKey = Db.keyOf(table, Object.assign({}, rec, autoId ? { id: originalKey } : {}));
     var existing = originalKey ? Db.findByKey(table, originalKey) : null;
     if (originalKey && !existing) throw userError_('Bản ghi không còn tồn tại (có thể đã bị xóa).');
     if (existing) {
-      if (table !== 'unavailability' && newKey !== originalKey) {
+      if (!autoId && newKey !== originalKey) {
         throw userError_('Không đổi được mã/khóa của bản ghi. Hãy tạo bản ghi mới rồi xóa bản ghi cũ.');
       }
       rec._row = existing._row;
       Db.update(table, [rec]);
       audit_(user, 'Sửa ' + TABLES[table].label, originalKey, rec);
     } else {
-      if (table === 'unavailability') {
-        rec.id = nextIds_('unavailability', 'LB', 1)[0];
+      if (autoId) {
+        rec.id = nextIds_(table, autoId, 1)[0];
         newKey = rec.id;
       } else if (Db.findByKey(table, newKey)) {
         throw userError_('Đã tồn tại bản ghi với mã/khóa "' + newKey + '".');
@@ -597,30 +686,54 @@ function normalizeRecord_(table, input) {
     }
     rec[c.key] = v;
   });
-  if (table === 'unavailability' && rec.start && rec.end && parseTime(rec.end) <= parseTime(rec.start)) {
+  if ((table === 'unavailability' || table === 'assistantFree') && rec.start && rec.end && parseTime(rec.end) <= parseTime(rec.start)) {
     throw userError_('Giờ kết thúc phải sau giờ bắt đầu.');
+  }
+  // Link Google Maps → tự lấy Vĩ độ/Kinh độ (link rút gọn / địa chỉ chữ: tra cứu khi bấm "Cập nhật Google Maps").
+  if ('mapUrl' in rec && TABLES[table].columns.some(function (c) { return c.key === 'lat'; })) {
+    var hasLatLng = str(input.lat) !== '' && str(input.lng) !== '' && 'lat' in rec && rec.lat !== '';
+    var parsed = parseMapsLink(rec.mapUrl);
+    if (parsed) { rec.lat = parsed.lat; rec.lng = parsed.lng; }
+    else if (rec.mapUrl && !hasLatLng) { rec.lat = ''; rec.lng = ''; }
   }
   return rec;
 }
 
 /** Tập mã đang có (để kiểm tra tham chiếu nhanh khi nhập nhiều dòng). */
 function refSets_() {
-  var sets = { teachers: {}, schools: {}, subjects: {} };
+  var sets = { teachers: {}, schools: {}, subjects: {}, assistants: {} };
   Object.keys(sets).forEach(function (t) {
     Db.read(t).forEach(function (r) { sets[t][str(r.code).toUpperCase()] = true; });
   });
   return sets;
 }
 
+var REF_TYPES = {
+  school: { sets: ['schools'], label: 'Mã trường' },
+  teacher: { sets: ['teachers'], label: 'Mã GV' },
+  assistant: { sets: ['assistants'], label: 'Mã trợ giảng' },
+  person: { sets: ['teachers', 'assistants'], label: 'Mã GV/TG' },
+  subject: { sets: ['subjects'], label: 'Mã môn' },
+};
+
+/** Kiểm tra các cột mã tham chiếu (trường, GV, TG, môn) có tồn tại. */
 function validateRefs_(table, rec, refs) {
   refs = refs || refSets_();
-  if (rec.teacher !== undefined && rec.teacher && !refs.teachers[rec.teacher]) throw userError_('Mã GV "' + rec.teacher + '" không tồn tại.');
-  if (rec.school !== undefined && rec.school && !refs.schools[rec.school]) throw userError_('Mã trường "' + rec.school + '" không tồn tại.');
+  TABLES[table].columns.forEach(function (c) {
+    var rt = REF_TYPES[c.type];
+    var v = rec[c.key];
+    if (!rt || v === undefined || v === '') return;
+    if (!rt.sets.some(function (set) { return refs[set][v]; })) throw userError_(rt.label + ' "' + v + '" không tồn tại.');
+  });
   if (table === 'teachers' && rec.subjects) {
     var bad = splitList(rec.subjects).filter(function (c) { return !refs.subjects[c]; });
     if (bad.length) throw userError_('Mã môn không tồn tại: ' + bad.join(', '));
   }
-  if (table === 'teachers' && rec.email && !isAllowedEmail(rec.email)) throw userError_('Email GV phải là email @' + APP.ALLOWED_DOMAINS[0]);
+  if ((table === 'teachers' || table === 'assistants') && rec.email && !isAllowedEmail(rec.email)) {
+    throw userError_('Email phải là email @' + APP.ALLOWED_DOMAINS[0]);
+  }
+  if (table === 'assistants' && rec.code && refs.teachers[rec.code]) throw userError_('Mã TG "' + rec.code + '" trùng với mã một GV – hãy dùng mã khác (vd. TG001).');
+  if (table === 'teachers' && rec.code && refs.assistants[rec.code]) throw userError_('Mã GV "' + rec.code + '" trùng với mã một trợ giảng.');
 }
 
 function dataDelete_(args, user) {
@@ -632,10 +745,14 @@ function dataDelete_(args, user) {
     var key = str(args.key);
     var rec = Db.findByKey(table, key);
     if (!rec) throw userError_('Không tìm thấy bản ghi.');
-    var refField = { teachers: 'teacher', schools: 'school', subjects: 'subject' }[table];
+    var refField = { teachers: 'teacher', schools: 'school', subjects: 'subject', assistants: 'assistant' }[table];
     if (refField) {
       var used = Db.read('lessons').filter(function (l) { return str(l[refField]).toUpperCase() === key; }).length;
       if (used) throw userError_('Đang được dùng trong ' + used + ' tiết của TKB. Hãy chuyển "Hoạt động" sang tắt thay vì xóa.');
+      if (table === 'subjects' || table === 'schools') {
+        var usedC = Db.read('classes').filter(function (c) { return str(c[refField]).toUpperCase() === key; }).length;
+        if (usedC) throw userError_('Đang được dùng trong ' + usedC + ' lớp (sheet LopHoc).');
+      }
     }
     Db.remove(table, [rec._row]);
     audit_(user, 'Xóa ' + TABLES[table].label, key, '');
@@ -648,7 +765,6 @@ function dataDelete_(args, user) {
 function overviewLists_(args, user) {
   var ctx = context_();
   var conflicts = detectConflicts(ctx);
-  var st = stateFromAssignments(ctx, null);
   var confByTeacher = {};
   var confBySchool = {};
   conflicts.forEach(function (c) {
@@ -658,28 +774,35 @@ function overviewLists_(args, user) {
       if (l) confBySchool[l.school] = (confBySchool[l.school] || 0) + 1;
     });
   });
-  var teachers = Object.keys(ctx.teachers).sort().map(function (code) {
-    var t = ctx.teachers[code];
-    var ts = st[code];
-    var lessonsCount = ts.byDay.reduce(function (s, d) { return s + d.length; }, 0);
-    return { code: code, name: t.name, type: t.typeLabel, rating: t.rating, district: t.district, active: t.active,
-      load: round1(ts.load), target: t.target, max: t.max, lessons: lessonsCount, schools: Object.keys(ts.schools).length,
-      conflicts: confByTeacher[code] || 0 };
+  var people = [];
+  Object.keys(STAFF_ROLES).forEach(function (role) {
+    var st = stateFromAssignments(ctx, null, role);
+    var pool = poolOf_(ctx, role);
+    Object.keys(pool).sort().forEach(function (code) {
+      var t = pool[code];
+      var ts = st[code];
+      var lessonsCount = ts.byDay.reduce(function (s, d) { return s + d.length; }, 0);
+      people.push({ code: code, role: role, name: t.name, type: t.typeLabel, rating: t.rating, district: t.district, active: t.active,
+        load: round1(ts.load), target: t.target, max: t.max, lessons: lessonsCount, schools: Object.keys(ts.schools).length,
+        conflicts: confByTeacher[code] || 0 });
+    });
   });
   var schoolStats = {};
   ctx.lessonList.forEach(function (l) {
-    var e = schoolStats[l.school] = schoolStats[l.school] || { lessons: 0, assigned: 0, teachers: {}, hours: 0 };
+    var e = schoolStats[l.school] = schoolStats[l.school] || { lessons: 0, assigned: 0, teachers: {}, hours: 0, needTA: 0, withTA: 0 };
     e.lessons++;
     e.hours += l.load;
-    if (l.teacher && ctx.teachers[l.teacher]) { e.assigned++; e.teachers[l.teacher] = true; }
+    if (!l.needTeacher || (l.teacher && ctx.teachers[l.teacher])) e.assigned++;
+    if (l.teacher && ctx.teachers[l.teacher]) e.teachers[l.teacher] = true;
+    if (!l.invalid && l.needAssistant) { e.needTA++; if (l.assistant && ctx.assistants[l.assistant]) e.withTA++; }
   });
   var schools = Object.keys(ctx.schools).sort().map(function (code) {
     var s = ctx.schools[code];
-    var e = schoolStats[code] || { lessons: 0, assigned: 0, teachers: {}, hours: 0 };
+    var e = schoolStats[code] || { lessons: 0, assigned: 0, teachers: {}, hours: 0, needTA: 0, withTA: 0 };
     return { code: code, name: s.name, district: s.district, active: s.active, lessons: e.lessons, assigned: e.assigned,
-      hours: round1(e.hours), teachers: Object.keys(e.teachers).length, conflicts: confBySchool[code] || 0 };
+      hours: round1(e.hours), teachers: Object.keys(e.teachers).length, needTA: e.needTA, withTA: e.withTA, conflicts: confBySchool[code] || 0 };
   });
-  return { teachers: teachers, schools: schools };
+  return { teachers: people, schools: schools };
 }
 
 function listLessons_(args, user) {
@@ -694,7 +817,8 @@ function bootstrap_(args, user) {
     user: publicUser_(user),
     app: { name: APP.NAME, title: APP.TITLE, version: APP.VERSION, superAdmin: APP.SUPER_ADMIN, domains: APP.ALLOWED_DOMAINS },
     roles: ROLES, weekdays: WEEKDAYS, teacherTypes: TEACHER_TYPES, ratings: RATINGS, preferences: PREFERENCES,
-    lookups: { schools: [], teachers: [], subjects: [], districts: [] },
+    lookups: { schools: [], teachers: [], assistants: [], classes: [], subjects: [], districts: [] },
+    staffRoles: STAFF_ROLES, yesNo: YES_NO,
   };
   var s = getSettings_();
   out.settings = { day_start: s.day_start, day_end: s.day_end, load_unit: s.load_unit, min_free_minutes: s.min_free_minutes };
@@ -708,6 +832,13 @@ function bootstrap_(args, user) {
     out.lookups.teachers = Db.read('teachers').map(function (x) {
       if (x.district) districts[x.district] = true;
       return { code: str(x.code).toUpperCase(), name: x.name, type: x.type, district: x.district, active: toBool(x.active, true) };
+    });
+    out.lookups.assistants = Db.read('assistants').map(function (x) {
+      if (x.district) districts[x.district] = true;
+      return { code: str(x.code).toUpperCase(), name: x.name, type: 'Trợ giảng', district: x.district, active: toBool(x.active, true) };
+    });
+    out.lookups.classes = Db.read('classes').map(function (x) {
+      return { school: str(x.school).toUpperCase(), className: str(x.className), grade: str(x.grade), subject: str(x.subject).toUpperCase(), needAssistant: str(x.needAssistant) };
     });
     out.lookups.districts = Object.keys(districts).sort();
   }
@@ -743,7 +874,7 @@ var ACTIONS = {
       var from = parseTime(a.from);
       var to = parseTime(a.to);
       if (from !== null && to !== null && to <= from) throw userError_('Khoảng giờ không hợp lệ.');
-      var res = computeFreeSlots(context_(), wd, { from: from, to: to, subject: a.subject, district: a.district, type: a.type, school: a.school });
+      var res = computeFreeSlots(context_(), wd, { role: a.role, from: from, to: to, subject: a.subject, district: a.district, type: a.type, school: a.school });
       if (!hasPerm(u, 'view_personal')) res.rows.forEach(function (r) { r.distance = null; r.busy.forEach(function (b) { if (b.kind === 'unavailable') b.label = 'Bận'; }); });
       return res;
     },
@@ -752,7 +883,7 @@ var ACTIONS = {
     perm: 'view_schedule', fn: function () {
       var ctx = context_();
       return detectConflicts(ctx).map(function (c) {
-        c.teacherName = c.teacher && ctx.teachers[c.teacher] ? ctx.teachers[c.teacher].name : '';
+        c.teacherName = c.teacher && ctx.people[c.teacher] ? ctx.people[c.teacher].name : '';
         c.schoolName = c.school && ctx.schools[c.school] ? ctx.schools[c.school].name : '';
         c.weekdayLabel = c.weekday !== undefined ? weekdayLabel(c.weekday) : '';
         return c;
@@ -770,7 +901,7 @@ var ACTIONS = {
       var ctx = context_();
       var l = ctx.lessons[str(a.id)];
       if (!l) throw userError_('Không tìm thấy tiết.');
-      return { lesson: lessonDto_(ctx, l, null), candidates: rankCandidates(ctx, l.id) };
+      return { lesson: lessonDto_(ctx, l, null), role: roleOf_(a.role), candidates: rankCandidates(ctx, l.id, a.role) };
     },
   },
   'auto.run': { perm: 'auto_schedule', fn: runAuto_ },
@@ -807,9 +938,12 @@ var ACTIONS = {
       return rows.slice(-limit).reverse().map(function (r) { return { at: r.at, user: r.user, action: r.action, entity: r.entity, details: r.details }; });
     },
   },
+  'maps.update': { perm: 'edit_teachers', fn: function (a, u) { return updateMapsData_(u); } },
   'cache.refresh': { fn: function () { Db.invalidateSnapshot(); return { ok: true }; } },
   'import.spec': { fn: function (a, u) { return importSpec_(a, u); } },
   'import.data': { fn: function (a, u) { return importData_(a, u); } },
+  'import.template': { perm: ['edit_timetable', 'edit_teachers', 'manage_users'], fn: function (a, u) { return makeImportTemplate_(a, u); } },
+  'import.readSheet': { perm: ['edit_timetable', 'edit_teachers', 'manage_users'], fn: function (a, u) { return readImportSheet_(a, u); } },
   'export.sheet': { perm: 'export', fn: function (a, u) { return exportToSpreadsheet_(u); } },
   'email.schedules': { perm: 'send_email', fn: function (a, u) { return emailSchedules_(u, a.teachers || []); } },
 };

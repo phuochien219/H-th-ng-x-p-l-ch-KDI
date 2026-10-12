@@ -11,26 +11,31 @@ Hệ thống xếp lịch giáo viên KDI Education đến dạy STEM tại hơn
 ## 1. Quy trình nghiệp vụ được chuẩn hóa
 
 ```
- Trường gửi TKB STEM ──► Sale nhập TKB (dán từ Excel / form)  ──►  sheet TKB
-                                                                    │
- AC quản lý dữ liệu GV: môn đã đào tạo, xếp loại, nhà ở (tọa độ),  │
- trường ưu tiên, khoảng cách, lịch bận  ──►  sheet GiaoVien, GV_Truong, LichBan
-                                                                    ▼
-                         Hệ thống XẾP LỊCH TỰ ĐỘNG (xem trước → áp dụng → hoàn tác)
-                                                                    ▼
-      Xem lịch theo GV / theo trường · Cảnh báo trùng lịch · Lịch trống · Xuất Sheets · Gửi email cho GV
+ Trường gửi TKB STEM ──► Sale nhập: lớp nào học CHƯƠNG TRÌNH gì (LopHoc) + TKB ──► sheet LopHoc, TKB
+                                                                                     │
+ AC quản lý GV: chương trình đã được ĐÀO TẠO (GV_DaoTao), xếp loại, link Google Maps │
+ nhà, trường ưu tiên, lịch bận ──► GiaoVien, GV_DaoTao, GV_Truong, LichBan           │
+ AC quản lý TRỢ GIẢNG: link Google Maps nhà, GIỜ RẢNH ──► TroGiang, TG_LichRanh       │
+ Google Maps: tọa độ từ link + quãng đường XE MÁY nhà → trường ──► KhoangCach         ▼
+                     Hệ thống XẾP LỊCH TỰ ĐỘNG cho GV và TRỢ GIẢNG (xem trước → áp dụng → hoàn tác)
+                                                                                     ▼
+   Lịch theo GV / TG / trường · Cảnh báo trùng lịch · Lịch trống · Xuất Sheets · Gửi email
 ```
 
 ## 2. Tính năng chính
 
 | Nhóm | Tính năng |
 |---|---|
-| **Xếp lịch tự động** | Xếp theo đúng thứ tự ưu tiên: (1) trường ưu tiên → (2) khoảng cách → (3) môn đã được đào tạo → (4) mỗi GV 2–3 trường → (5) cân bằng giờ dạy (khoảng 15h/tuần với GV thường, 10h/tuần với GV kiêm nhiệm). Có **xem trước**, **áp dụng**, **hoàn tác** và lịch sử 15 lần chạy gần nhất. Mỗi phân công kèm **giải thích điểm số**. |
-| **Xem lịch** | Lịch tuần dạng lưới hoặc danh sách **theo từng giáo viên** và **theo từng trường**. Có in, tải CSV, dùng được trên điện thoại. |
+| **Xếp lịch tự động – Giáo viên** | Chỉ xếp GV **đã được đào tạo đúng chương trình của lớp** (vd. School - Grade 03). Sau đó xếp theo thứ tự: (1) trường ưu tiên → (2) khoảng cách xe máy → (4) mỗi GV 2–3 trường → (5) cân bằng giờ dạy (khoảng 15h/tuần với GV thường, 10h/tuần với GV kiêm nhiệm). Lớp do **GV của trường** dạy thì không xếp GV KDI. |
+| **Xếp lịch tự động – Trợ giảng** | Chỉ xếp trong **giờ rảnh** trợ giảng đã đăng ký, ưu tiên người **ở gần trường nhất** (quãng đường xe máy theo Google Maps), sau đó đến người đang hỗ trợ ở trường đó và cân bằng giờ. |
+| **Google Maps** | Dán **link Google Maps** của trường / nhà GV / nhà TG. Hệ thống tự lấy tọa độ (kể cả link rút gọn `maps.app.goo.gl` hoặc địa chỉ chữ) và tính **quãng đường xe máy** (tránh đường cao tốc), lưu lại để dùng cho các lần xếp sau. |
+| **Xem trước / hoàn tác** | Mỗi lần chạy đều có **xem trước**, **áp dụng**, **hoàn tác** và lịch sử 15 lần chạy gần nhất. Mỗi phân công kèm **giải thích điểm số**. |
+| **Xem lịch** | Lịch tuần dạng lưới hoặc danh sách **theo từng GV, từng trợ giảng** và **theo từng trường** (kèm danh sách lớp – chương trình). Có in, tải CSV, dùng được trên điện thoại. |
 | **Cảnh báo trùng lịch** | Phát hiện trùng giờ, không đủ thời gian di chuyển giữa 2 trường, xếp vào lịch bận, GV bị đánh dấu "Không xếp", vượt giờ, quá nhiều trường, môn chưa đào tạo, trường quá xa, mã GV/trường sai. Kiểm tra cả các thay đổi sửa tay trên Sheets. |
 | **Lịch trống** | Xem khoảng trống của GV theo từng thứ trong tuần. Tìm GV rảnh trong một khung giờ tại một trường (đã tính thời gian di chuyển), lọc theo môn, quận, loại GV. |
 | **Gán tay / tìm GV dạy thay** | Khi bấm vào một tiết, hệ thống xếp hạng mọi GV theo điểm, ghi rõ lý do GV nào không phù hợp, và cho gán bằng 1 cú bấm. Có thể 📌 **ghim** tiết để lần xếp tự động sau không đổi. |
-| **Nhập liệu nhanh** | Tải **file Excel mẫu** (GV, trường, môn, trường ưu tiên, lịch bận, TKB, tài khoản), điền rồi **tải lên 1 lần**. Hệ thống kiểm tra từng dòng trước khi ghi. Sale cũng có thể dán TKB thẳng từ Excel. |
+| **Nhập liệu nhanh** | Tạo **file nhập liệu Google Sheets / Excel** có **danh sách thả xuống** cho mọi cột chuẩn hóa được (thứ, loại GV, xếp loại, mã trường, mã GV, mã TG, chương trình…). Điền rồi **tải lên 1 lần**; hệ thống kiểm tra từng dòng trước khi ghi. |
+| **Ma trận đào tạo** | Bảng GV × chương trình, đếm số GV đạt so với số lớp đang học từng chương trình, chỉ ra chương trình cần đào tạo thêm GV. |
 | **Phân tích** | Tổng quan: % tiết đã xếp, công suất GV, GV vượt/thiếu giờ. **Cung – cầu theo môn** (gợi ý môn cần đào tạo thêm GV) và **phân bố theo quận** (gợi ý khu vực cần tuyển GV). |
 | **Xuất & thông báo** | Xuất toàn bộ lịch ra file Google Sheets mới (lưới theo GV, theo trường, tổng hợp giờ, chưa xếp, cảnh báo). **Gửi email lịch dạy** cho từng GV. |
 | **Quản trị** | Người dùng & phân quyền, cấu hình trọng số/định mức, nhật ký mọi thao tác. |
@@ -74,8 +79,10 @@ Dùng các file trong thư mục [`dist/`](dist):
 
 ### Bước 3 – Khởi tạo dữ liệu
 1. Trong trình soạn Apps Script, chọn hàm `setupSheets` rồi bấm **Chạy**, và cấp quyền khi được hỏi.
-2. Quay lại Google Sheets và tải lại trang. Menu **🗓 KDI Xếp lịch** sẽ xuất hiện, cùng các sheet: `CauHinh`, `NguoiDung`, `MonHoc`, `TruongHoc`, `GiaoVien`, `GV_Truong`, `LichBan`, `TKB`, `LichSuXep`, `LichSuXep_ChiTiet`, `NhatKy`.
-3. *(Tùy chọn)* Chọn menu **🗓 KDI Xếp lịch → Nạp dữ liệu mẫu** để thử với 72 trường, 110 GV và 1.450 tiết. **Thao tác này xóa dữ liệu hiện có.**
+2. Quay lại Google Sheets và tải lại trang. Menu **🗓 KDI Xếp lịch** sẽ xuất hiện, cùng các sheet: `CauHinh`, `NguoiDung`, `MonHoc`, `TruongHoc`, `LopHoc`, `GiaoVien`, `GV_DaoTao`, `TroGiang`, `TG_LichRanh`, `GV_Truong`, `LichBan`, `KhoangCach`, `TKB`, `LichSuXep`, `LichSuXep_ChiTiet`, `NhatKy`.
+3. *(Tùy chọn)* Chọn menu **🗓 KDI Xếp lịch → Nạp dữ liệu mẫu** để thử với dữ liệu Hà Nội: 45 trường, 80 GV, 75 trợ giảng, khoảng 690 tiết. **Thao tác này xóa dữ liệu hiện có.**
+
+> Đã cài bản cũ? Sau khi chép code mới, chạy lại `setupSheets` một lần: hệ thống tự thêm sheet và cột mới, dữ liệu cũ được giữ nguyên.
 
 ### Bước 4 – Triển khai ứng dụng web
 1. Trong trình soạn Apps Script: **Triển khai → Triển khai mới → Loại: Ứng dụng web**.
@@ -87,22 +94,28 @@ Khi đó, người dùng mở link đang đăng nhập Google bằng tài khoả
 
 > **Phương án dự phòng – đăng nhập bằng mã OTP:** nếu không đọc được email từ phiên Google (ví dụ khi triển khai cho "Bất kỳ ai"), màn hình đăng nhập sẽ yêu cầu nhập email `@kdi.edu.vn`. Hệ thống gửi **mã 6 số** qua email (mã có hiệu lực 10 phút, sai tối đa 5 lần, phiên đăng nhập kéo dài 6 giờ).
 
-### Bước 5 – Nhập dữ liệu thật (bằng file Excel)
-1. Vào web → **Nhập dữ liệu từ Excel** → bấm **Tải file mẫu Excel**. Có thể dùng luôn file [`mau-du-lieu/Mau_nhap_lieu_KDI.xlsx`](mau-du-lieu/Mau_nhap_lieu_KDI.xlsx); file này có sẵn danh sách chọn sổ xuống.
-2. Mở file bằng Excel. Sheet **HuongDan** giải thích từng cột. Điền vào các sheet sau và xóa các dòng ví dụ (chữ nghiêng màu xám):
-   - **MonHoc**: môn STEM, mã môn ngắn (ví dụ RB = Robotics).
-   - **TruongHoc**: trường học. Tọa độ lấy từ Google Maps: nhấp phải vào vị trí trường, bấm vào dòng số đầu tiên của menu.
-   - **GiaoVien**: Loại GV (`Thường`/`Kiêm nhiệm`), xếp loại, các môn đã đào tạo (ví dụ `RB, SCR`), email @kdi.edu.vn.
-   - **GV_Truong**: trường **Ưu tiên** hoặc **Không xếp** của từng GV, kèm khoảng cách. Không bắt buộc, vì hệ thống tự ước tính khoảng cách từ tọa độ.
-   - **LichBan**: giờ bận của GV.
-   - **TKB**: thời khóa biểu STEM của các trường.
-   - **NguoiDung**: tài khoản nhân viên. Vai trò ghi `AC`, `Sale`, `Xem lịch`, `Giáo viên` hoặc `Admin`.
-3. Lưu file → chọn file trên web → **Kiểm tra (chưa ghi)**. Hệ thống báo lỗi theo **số dòng Excel**.
-4. Bấm **Nhập dữ liệu**. Có 2 cách nhập:
-   - **Thêm mới + cập nhật theo mã** *(mặc định)*: dòng trùng mã sẽ cập nhật bản ghi cũ, cột không có trong file giữ nguyên.
-   - **Thay thế**: xóa dữ liệu cũ rồi nhập lại. Riêng TKB chỉ thay thế TKB của các trường có trong file.
+### Bước 5 – Nhập dữ liệu thật
+1. Vào web → **Nhập dữ liệu từ Excel** → bấm **📄 Tạo file nhập liệu (Google Sheets)**.
+   - File tạo ra kèm dữ liệu hiện có. Mọi cột chuẩn hóa được đều có **danh sách thả xuống**; cột mã trường/GV/TG/chương trình lấy danh sách từ chính các sheet trong file.
+   - Có thể điền online, hoặc bấm **Tải về dạng Excel**.
+   - Bản Excel tĩnh có sẵn: [`mau-du-lieu/Mau_nhap_lieu_KDI.xlsx`](mau-du-lieu/Mau_nhap_lieu_KDI.xlsx).
+2. Điền dữ liệu theo thứ tự các sheet (sheet **HuongDan** giải thích từng cột):
+   - **MonHoc** – chương trình (`G01` = School - Grade 01 … `G09`, `GK` = School - Grade .K).
+   - **TruongHoc** – trường học. Cột **Link Google Maps**: trên Google Maps chọn trường → **Chia sẻ → Sao chép đường liên kết** → dán vào.
+   - **LopHoc** – mỗi lớp học **chương trình gì**, có **cần GV KDI** không (Không = GV của trường dạy) và **cần trợ giảng** không.
+   - **GiaoVien** – thông tin GV, link Google Maps nhà.
+   - **GV_DaoTao** – mỗi dòng là 1 GV × 1 chương trình đã được đào tạo. Chỉ trạng thái **Đạt** mới được xếp dạy.
+   - **TroGiang** + **TG_LichRanh** – trợ giảng và các khung **giờ rảnh** trong tuần.
+   - **GV_Truong** – trường ưu tiên / không xếp (không bắt buộc).
+   - **LichBan** – giờ bận của GV.
+   - **TKB** – thời khóa biểu. Cột Mã môn có thể để trống, hệ thống tự lấy theo lớp.
+   - **NguoiDung** – tài khoản nhân viên (`AC`, `Sale`, `Xem lịch`, `Giáo viên`, `Admin`).
+3. Trên web: dán link file Google Sheets (hoặc chọn file Excel) → **Kiểm tra (chưa ghi)** → **Nhập dữ liệu**.
+4. Vào **Danh mục dữ liệu → Trường học** → bấm **🗺 Cập nhật Google Maps** để hệ thống lấy tọa độ và tính quãng đường xe máy. Lần đầu có thể mất vài lượt chạy, mỗi lượt khoảng 4 phút; giao diện tự chạy tiếp cho đến khi xong.
 
-Sau đó có thể xem và sửa tiếp trong **Danh mục dữ liệu**, hoặc sửa trực tiếp trên Google Sheets.
+**Hai cách nhập:**
+- **Thêm mới + cập nhật theo mã** *(mặc định)*: dòng trùng mã sẽ cập nhật bản ghi cũ.
+- **Thay thế**: xóa dữ liệu cũ rồi nhập lại. Riêng TKB chỉ thay thế TKB của các trường có trong file.
 
 ---
 
@@ -110,11 +123,13 @@ Sau đó có thể xem và sửa tiếp trong **Danh mục dữ liệu**, hoặc
 
 ### Ràng buộc cứng – không bao giờ vi phạm khi hệ thống tự xếp
 - Một GV không dạy 2 tiết trùng giờ. Giữa 2 tiết ở **2 trường khác nhau** phải đủ thời gian di chuyển: tối thiểu 30 phút, hoặc lâu hơn tùy khoảng cách giữa 2 trường (tốc độ 20 km/h).
+- **GV phải được đào tạo đúng chương trình của lớp** (GV_DaoTao, trạng thái "Đạt"). Đây là mặc định; có thể tắt trong Cấu hình.
+- Lớp do GV của trường dạy (**Cần GV KDI = Không**) thì không xếp GV KDI.
 - Không xếp vào **lịch bận**. Không xếp GV bị đánh dấu **"Không xếp"** tại trường. Không xếp GV ngừng hoạt động.
+- **Trợ giảng:** chỉ xếp vào tiết **cần trợ giảng**, và tiết phải nằm trọn trong một khung **giờ rảnh** đã đăng ký.
 - Không vượt **giờ tối đa/tuần**: định mức + 3h, có thể chỉnh riêng cho từng GV.
 - Không vượt **số trường tối đa**: 3 trường, có thể chỉnh riêng cho từng GV.
 - Không vượt **khoảng cách tối đa** (25 km), trừ trường ưu tiên của GV.
-- *(Tùy chọn)* Bắt buộc GV đã được đào tạo môn.
 
 ### Tiêu chí ưu tiên, xếp theo đúng thứ tự KDI yêu cầu
 Mỗi cặp (GV, tiết) được chấm điểm. Trọng số mặc định khiến tiêu chí đứng trước gần như luôn thắng tiêu chí đứng sau:
@@ -122,15 +137,31 @@ Mỗi cặp (GV, tiết) được chấm điểm. Trọng số mặc định khi
 | Thứ tự | Tiêu chí | Điểm mặc định |
 |---|---|---|
 | (1) | Trường ưu tiên xếp của GV | **+1000** |
-| (2) | Khoảng cách nhà GV → trường | **−20 / km** |
-| (3) | GV đã được đào tạo môn | **+100** (tương đương 5 km) |
+| (2) | Khoảng cách nhà GV → trường (Google Maps, xe máy) | **−20 / km** |
+| (3) | GV đã được đào tạo chương trình | bắt buộc (hoặc +100 nếu tắt chế độ bắt buộc) |
 | (4) | GV đang dạy ở trường đó / đã có lịch ở trường cùng ngày | +50 / +20 |
 | (4) | Thêm trường vượt mức "nên dạy" (2 trường) | −80 |
 | (5) | GV còn thiếu giờ so với định mức (10h/15h) | tối đa +40 |
 | (5) | Vượt định mức | −30 / giờ |
 | — | Xếp loại chất lượng A/B/C/D | +20 / +10 / 0 / −10 |
 
+**Trợ giảng** được chấm điểm riêng:
+- Khoảng cách xe máy nhà → trường: **−40 / km**, tức là ưu tiên người ở gần.
+- Đang hỗ trợ ở trường đó: +50.
+- Đã có lịch ở trường đó cùng ngày: +20.
+- Cân bằng giờ: hướng tới 10h/tuần.
+
 Admin chỉnh được mọi trọng số trong **Cấu hình xếp lịch**.
+
+**Nguồn khoảng cách**, theo thứ tự ưu tiên:
+1. Số nhập tay ở GV_Truong.
+2. Quãng đường xe máy Google Maps ở sheet KhoangCach (tự tính lại khi đổi link/vị trí).
+3. Ước tính theo đường chim bay × 1,35, dùng khi chưa tính Google Maps.
+
+**Google Maps và đường xe máy:**
+- Mặc định dùng dịch vụ Maps có sẵn của Apps Script, không cần API key, chế độ lái xe **tránh đường cao tốc**. Xe máy không được đi cao tốc nên quãng đường này sát với đường đi thực tế của xe máy.
+- Nếu admin nhập **Google Maps API key** trong Cấu hình, hệ thống dùng Routes API chế độ **TWO_WHEELER** (xe 2 bánh) và tính nhanh hơn nhiều.
+- Hạn mức miễn phí của Apps Script khoảng vài nghìn lượt mỗi ngày với Google Workspace. Hết hạn mức thì hệ thống dừng và lưu phần đã tính, hôm sau bấm lại để tính tiếp.
 
 ### Các bước chạy
 1. **Bước 1 – Trường ưu tiên:** xếp trước các tiết có GV ưu tiên, chỉ chọn trong nhóm GV ưu tiên đã được đào tạo đúng môn.
@@ -140,20 +171,21 @@ Admin chỉnh được mọi trọng số trong **Cấu hình xếp lịch**.
 
 Tiết không xếp được sẽ có **lý do cụ thể**, ví dụ: *"Không có GV phù hợp: 8 GV trùng giờ dạy; 3 GV đã đủ giờ tối đa; 40 GV quá xa (> 25 km)"*.
 
-> Với dữ liệu mẫu (72 trường, 110 GV, 1.450 tiết/tuần), hệ thống xếp đủ 100% số tiết trong khoảng 1 giây, không có trùng lịch. Mỗi GV dạy 1–3 trường và không ai vượt giờ tối đa.
+> Thử với TKB thực tế Hà Nội (44 trường, 742 tiết/tuần): hệ thống xếp đủ 718/718 tiết cần GV KDI và 714/714 tiết cần trợ giảng trong khoảng 1 giây. Không có trùng lịch, không GV nào dạy chương trình chưa được đào tạo, không trợ giảng nào bị xếp ngoài giờ rảnh.
 
-**Lưu ý cấu hình:** mặc định, điểm "trường ưu tiên" chỉ áp dụng cho các môn GV **đã được đào tạo**. Nhờ đó GV ưu tiên không phải nhận dạy môn chưa được đào tạo. Muốn ưu tiên tuyệt đối theo trường, tắt tùy chọn này trong Cấu hình.
+
 
 ---
 
 ## 6. Vận hành hằng tuần (gợi ý cho AC)
 1. Sale nhập hoặc cập nhật TKB mới của trường (**Thời khóa biểu → Dán TKB từ Excel**).
-2. AC vào **Xếp lịch tự động → Điền tiết trống → Chạy thử**, kiểm tra tab *Chưa xếp được* và *Giờ dạy*, rồi bấm **Áp dụng**.
-3. Xem **Cảnh báo trùng lịch** và xử lý các mục màu đỏ.
-4. Với tiết cần giữ cố định, mở tiết đó và bấm **📌 Ghim**.
-5. Khi có GV nghỉ đột xuất, vào **Lịch trống** (nhập khung giờ và trường) hoặc mở tiết đó để xem danh sách GV thay thế phù hợp nhất.
-6. Bấm **Gửi lịch cho GV** để gửi email, hoặc **Xuất Google Sheets** để gửi cho trường.
-7. Đầu học kỳ mới: tạo bản sao file Google Sheets để lưu trữ học kỳ cũ.
+2. Có GV/TG mới hoặc đổi địa chỉ: dán link Google Maps rồi bấm **🗺 Cập nhật Google Maps**.
+3. AC vào **Xếp lịch tự động**, chọn **Giáo viên + Trợ giảng → Điền tiết trống → Chạy thử**. Kiểm tra tab *Chưa xếp được* và *Giờ dạy*, rồi bấm **Áp dụng**.
+4. Xem **Cảnh báo trùng lịch** và xử lý các mục màu đỏ.
+5. Với tiết cần giữ cố định, mở tiết đó và bấm **📌 Ghim**.
+6. Khi có GV/TG nghỉ đột xuất, vào **Lịch trống** (chọn GV hoặc Trợ giảng, nhập khung giờ và trường), hoặc mở tiết đó để xem danh sách người thay thế phù hợp nhất.
+7. Bấm **Gửi lịch qua email**, hoặc **Xuất Google Sheets** để gửi cho trường.
+8. Đầu học kỳ mới: tạo bản sao file Google Sheets để lưu trữ học kỳ cũ.
 
 ## 7. Tốc độ & giới hạn của Google Apps Script
 - **Lưu tạm dữ liệu:** dữ liệu được lưu tạm 5 phút nên các trang mở nhanh hơn nhiều so với đọc trực tiếp Google Sheets mỗi lần.
@@ -178,7 +210,8 @@ apps-script/         Mã nguồn Apps Script (đẩy bằng clasp)
   Conflicts.gs       Phát hiện trùng lịch, lịch trống, số liệu tổng quan
   Auth.gs            Đăng nhập (Google Workspace / OTP), phân quyền, quản lý người dùng
   Api.gs             Điểm vào duy nhất api(action, args, token) + kiểm tra quyền tập trung
-  Import.gs          Nhập dữ liệu hàng loạt từ file Excel (kiểm tra từng dòng)
+  Import.gs          Nhập dữ liệu hàng loạt; tạo file nhập liệu Google Sheets có danh sách thả xuống
+  Maps.gs            Google Maps: tọa độ từ link, quãng đường xe máy nhà → trường
   Export.gs          Xuất Google Sheets, gửi email lịch dạy
   Setup.gs           Menu trong Sheets, khởi tạo sheet, dữ liệu mẫu
   WebApp.gs          doGet()

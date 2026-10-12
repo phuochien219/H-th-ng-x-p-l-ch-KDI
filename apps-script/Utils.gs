@@ -193,3 +193,41 @@ function escapeHtml(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+
+/**
+ * Lấy tọa độ từ link Google Maps hoặc chuỗi "vĩ độ, kinh độ". Trả về {lat, lng} hoặc null.
+ * Hiểu các dạng: .../place/Ten/@21.03,105.85,17z/data=...!3d21.0301!4d105.8512
+ *   ...?q=21.03,105.85   .../search/21.03,+105.85   "21.0301, 105.8512"
+ * Link rút gọn (maps.app.goo.gl) hoặc địa chỉ chữ cần tra cứu qua mạng → xem Maps.gs.
+ */
+function parseMapsLink(v) {
+  var s = str(v);
+  if (!s) return null;
+  try { s = decodeURIComponent(s); } catch (e) { /* giữ nguyên */ }
+  var patterns = [
+    /!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/, // vị trí chính xác của địa điểm
+    /[?&](?:q|query|ll|destination|center|daddr)=(-?\d{1,2}\.\d+)\s*,\s*\+?(-?\d{1,3}\.\d+)/,
+    /\/(?:search|place|dir)\/(-?\d{1,2}\.\d+)\s*,\s*\+?(-?\d{1,3}\.\d+)/,
+    /@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/, // tâm khung bản đồ
+    /^\s*\(?\s*(-?\d{1,2}\.\d+)\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*\)?\s*$/,
+  ];
+  for (var i = 0; i < patterns.length; i++) {
+    var m = s.match(patterns[i]);
+    if (m) {
+      var lat = Number(m[1]);
+      var lng = Number(m[2]);
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) return { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 };
+    }
+  }
+  return null;
+}
+
+/** Link dạng rút gọn / địa chỉ chữ cần tra cứu qua mạng. */
+function needsRemoteLookup(v) {
+  return !!str(v) && !parseMapsLink(v);
+}
+
+/** Link Google Maps mở được từ tọa độ (để hiển thị). */
+function mapsUrlFromCoords(lat, lng) {
+  return 'https://www.google.com/maps?q=' + lat + ',' + lng;
+}

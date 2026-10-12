@@ -12,7 +12,7 @@
  *   ảnh chụp tự hết hạn sau SNAPSHOT_TTL_SEC giây.
  * - Trong withLock_ (khi ghi) luôn đọc trực tiếp từ sheet để đảm bảo chính xác.
  */
-var SNAPSHOT_TABLES = ['settings', 'users', 'subjects', 'schools', 'teachers', 'links', 'unavailability', 'lessons'];
+var SNAPSHOT_TABLES = ['settings', 'users', 'subjects', 'schools', 'classes', 'teachers', 'training', 'assistants', 'assistantFree', 'links', 'unavailability', 'distances', 'lessons'];
 var SNAPSHOT_TTL_SEC = 300;
 var SNAPSHOT_CHUNK = 30000; // ký tự/ô cache (giới hạn 100KB, tiếng Việt tối đa 3 byte/ký tự)
 

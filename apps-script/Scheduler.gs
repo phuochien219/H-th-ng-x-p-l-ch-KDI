@@ -1,27 +1,26 @@
 /**
  * THUẬT TOÁN XẾP LỊCH TỰ ĐỘNG (thuần JavaScript, không gọi dịch vụ Google).
+ * Dùng chung cho 2 nhóm nhân sự: GIÁO VIÊN (role 'teacher') và TRỢ GIẢNG (role 'assistant').
  *
  * Ràng buộc CỨNG (không bao giờ vi phạm khi hệ thống tự xếp):
- *   - GV không dạy 2 tiết trùng giờ; giữa 2 trường khác nhau phải đủ thời gian di chuyển.
- *   - Không xếp vào lịch bận của GV; không xếp GV bị đánh dấu "Không xếp" tại trường.
- *   - Không vượt giờ tối đa/tuần, không vượt số trường tối đa (mặc định 3).
- *   - Không quá khoảng cách tối đa (trừ khi là trường ưu tiên của GV).
- *   - (Tùy chọn) GV phải được đào tạo môn.
+ *   - Không dạy 2 tiết trùng giờ; giữa 2 trường khác nhau phải đủ thời gian di chuyển.
+ *   - GV: không xếp vào lịch bận; PHẢI được đào tạo chương trình của lớp (mặc định bật).
+ *   - Trợ giảng: chỉ xếp trong khung giờ rảnh đã đăng ký (nếu có đăng ký).
+ *   - Không xếp người bị đánh dấu "Không xếp" tại trường; không vượt giờ tối đa,
+ *     số trường tối đa, khoảng cách tối đa (trừ trường ưu tiên).
  *
- * Tiêu chí MỀM theo thứ tự ưu tiên (thể hiện qua trọng số, chỉnh được ở Cấu hình):
- *   (1) trường ưu tiên xếp → (2) khoảng cách gần → (3) môn đã được đào tạo
- *   → (4) ít trường (2–3 trường/GV) → (5) cân bằng giờ dạy (10h kiêm nhiệm / 15h thường)
- *   → xếp loại chất lượng GV.
+ * Tiêu chí MỀM theo thứ tự ưu tiên (trọng số chỉnh được ở Cấu hình):
+ *   GV:  (1) trường ưu tiên → (2) khoảng cách → (3) chương trình đã đào tạo
+ *        → (4) ít trường (2–3 trường/GV) → (5) cân bằng giờ dạy → xếp loại.
+ *   TG:  khoảng cách gần trường (trọng số lớn) → đang hỗ trợ ở trường đó → cân bằng giờ.
  *
- * Các bước:
- *   Bước 1: xếp các tiết có GV ưu tiên trước (chỉ chọn trong nhóm GV ưu tiên).
- *   Bước 2: xếp phần còn lại theo từng trường, trường "khó" (ít GV phù hợp) làm trước.
- *   Bước 3: sửa chữa – với tiết chưa xếp được, thử chuyển 1 tiết đang chặn sang GV khác.
- *   Bước 4: cân bằng – chuyển tiết từ GV vượt định mức sang GV còn thiếu giờ nếu
- *           điểm không giảm quá ngưỡng cho phép.
+ * Các bước: B1 trường ưu tiên → B2 xếp theo trường (trường khó trước)
+ *           → B3 hoán đổi để xếp được tiết bị kẹt → B4 cân bằng giờ dạy.
  */
 
 var RATING_LEVEL = { A: 2, B: 1, C: 0, D: -1 };
+
+function emptyWeek_() { return [[], [], [], [], [], [], []]; }
 
 /** Dựng ngữ cảnh xếp lịch từ dữ liệu thô của các bảng. */
 function buildContext(data, settings) {
@@ -31,7 +30,10 @@ function buildContext(data, settings) {
   S.dayStartMin = parseTime(S.day_start) || 420;
   S.dayEndMin = parseTime(S.day_end) || 1050;
 
-  var ctx = { S: S, subjects: {}, schools: {}, teachers: {}, links: {}, lessons: {}, lessonList: [], distCache: {}, travelCache: {} };
+  var ctx = {
+    S: S, subjects: {}, schools: {}, classes: {}, teachers: {}, assistants: {}, people: {},
+    links: {}, maps: {}, lessons: {}, lessonList: [], distCache: {}, travelCache: {},
+  };
 
   (data.subjects || []).forEach(function (s) {
     var code = str(s.code).toUpperCase();
@@ -41,10 +43,18 @@ function buildContext(data, settings) {
   (data.schools || []).forEach(function (s) {
     var code = str(s.code).toUpperCase();
     if (!code) return;
+    var ll = coordsOf_(s);
     ctx.schools[code] = {
       code: code, name: str(s.name) || code, district: str(s.district),
-      lat: toNum(s.lat), lng: toNum(s.lng), active: toBool(s.active, true),
+      lat: ll.lat, lng: ll.lng, active: toBool(s.active, true),
     };
+  });
+
+  (data.classes || []).forEach(function (c) {
+    var sc = str(c.school).toUpperCase();
+    var cn = str(c.className).toUpperCase();
+    if (!sc || !cn) return;
+    ctx.classes[sc + '|' + cn] = { subject: str(c.subject).toUpperCase(), grade: str(c.grade), needAssistant: str(c.needAssistant), needTeacher: str(c.needTeacher) };
   });
 
   (data.teachers || []).forEach(function (t) {
@@ -54,21 +64,60 @@ function buildContext(data, settings) {
     var target = toNum(t.targetHours) || (partTime ? S.target_hours_part_time : S.target_hours_full_time);
     var max = toNum(t.maxHours) || (target + S.max_hours_tolerance);
     var rating = str(t.rating).toUpperCase();
-    ctx.teachers[code] = {
-      code: code, name: str(t.name) || code, email: normEmail(t.email),
+    var ll = coordsOf_(t);
+    var p = {
+      code: code, role: 'teacher', name: str(t.name) || code, email: normEmail(t.email),
       partTime: partTime, typeLabel: partTime ? 'Kiêm nhiệm' : 'Thường',
       rating: RATING_LEVEL.hasOwnProperty(rating) ? rating : 'C',
-      district: str(t.district), lat: toNum(t.lat), lng: toNum(t.lng),
+      district: str(t.district), lat: ll.lat, lng: ll.lng,
+      // Tương thích dữ liệu cũ: cột "Môn đã đào tạo" (nếu còn).
       subjects: splitList(t.subjects).map(function (x) { return x.toUpperCase(); }),
       target: target, max: Math.max(max, target),
       maxSchools: toNum(t.maxSchools) || S.hard_max_schools,
       active: toBool(t.active, true),
-      unavailable: [[], [], [], [], [], [], []],
+      unavailable: emptyWeek_(), free: null,
     };
+    ctx.teachers[code] = p;
+    ctx.people[code] = p;
+  });
+
+  (data.training || []).forEach(function (r) {
+    var t = ctx.teachers[str(r.teacher).toUpperCase()];
+    var subj = str(r.subject).toUpperCase();
+    var status = removeDiacritics_(str(r.status)).toLowerCase();
+    if (!t || !subj || (status && status !== 'dat')) return;
+    if (t.subjects.indexOf(subj) < 0) t.subjects.push(subj);
+  });
+
+  (data.assistants || []).forEach(function (a) {
+    var code = str(a.code).toUpperCase();
+    if (!code || ctx.people[code]) return;
+    var target = toNum(a.targetHours) || S.target_hours_assistant;
+    var max = toNum(a.maxHours) || (target + S.max_hours_tolerance);
+    var ll = coordsOf_(a);
+    var p = {
+      code: code, role: 'assistant', name: str(a.name) || code, email: normEmail(a.email),
+      partTime: false, typeLabel: 'Trợ giảng', rating: '', district: str(a.district), lat: ll.lat, lng: ll.lng,
+      subjects: [], target: target, max: Math.max(max, target),
+      maxSchools: toNum(a.maxSchools) || S.assistant_max_schools,
+      active: toBool(a.active, true), unavailable: emptyWeek_(), free: null,
+    };
+    ctx.assistants[code] = p;
+    ctx.people[code] = p;
+  });
+
+  (data.assistantFree || []).forEach(function (f) {
+    var p = ctx.assistants[str(f.assistant).toUpperCase()];
+    var wd = parseWeekday(f.weekday);
+    var s = parseTime(f.start);
+    var e = parseTime(f.end);
+    if (!p || wd < 0 || s === null || e === null || e <= s) return;
+    if (!p.free) p.free = emptyWeek_();
+    p.free[wd].push({ start: s, end: e });
   });
 
   (data.unavailability || []).forEach(function (u) {
-    var t = ctx.teachers[str(u.teacher).toUpperCase()];
+    var t = ctx.people[str(u.teacher).toUpperCase()];
     var wd = parseWeekday(u.weekday);
     var s = parseTime(u.start);
     var e = parseTime(u.end);
@@ -83,14 +132,32 @@ function buildContext(data, settings) {
     ctx.links[tc + '|' + sc] = { distance: toNum(l.distance), preference: normPreference(l.preference) };
   });
 
+  (data.distances || []).forEach(function (d) {
+    var pc = str(d.person).toUpperCase();
+    var sc = str(d.school).toUpperCase();
+    var km = toNum(d.km);
+    if (!pc || !sc || km === null) return;
+    ctx.maps[pc + '|' + sc] = { km: km, minutes: toNum(d.minutes), coords: str(d.coords) };
+  });
+
   (data.lessons || []).forEach(function (l) {
+    var school = str(l.school).toUpperCase();
+    var className = str(l.className);
+    var cls = ctx.classes[school + '|' + className.toUpperCase()] || null;
+    var subject = str(l.subject).toUpperCase() || (cls ? cls.subject : '');
+    var need = str(l.needAssistant) || (cls ? cls.needAssistant : '');
+    var needT = str(l.needTeacher) || (cls ? cls.needTeacher : '');
     var lesson = {
-      id: str(l.id), row: l._row, school: str(l.school).toUpperCase(),
+      id: str(l.id), row: l._row, school: school,
       weekday: parseWeekday(l.weekday), start: parseTime(l.start), end: parseTime(l.end),
-      className: str(l.className), grade: str(l.grade), subject: str(l.subject).toUpperCase(),
+      className: className, grade: str(l.grade) || (cls ? cls.grade : ''), subject: subject,
+      subjectFromClass: !str(l.subject) && !!cls,
       periods: toNum(l.periods) || 1, room: str(l.room),
-      teacher: str(l.teacher).toUpperCase(), locked: toBool(l.locked, false),
-      source: str(l.source), explain: str(l.explain), notes: str(l.notes),
+      teacher: str(l.teacher).toUpperCase(), assistant: str(l.assistant).toUpperCase(), needRaw: str(l.needAssistant),
+      needAssistant: need ? yesNo_(need, S.default_need_assistant) : !!S.default_need_assistant,
+      needTeacher: needT ? yesNo_(needT, true) : true, needTeacherRaw: str(l.needTeacher),
+      locked: toBool(l.locked, false),
+      source: str(l.source), explain: str(l.explain), explainTA: str(l.explainTA), notes: str(l.notes),
     };
     lesson.invalid = validateLesson_(ctx, lesson);
     lesson.load = lesson.invalid ? 0 : (S.load_unit === 'periods' ? lesson.periods : (lesson.end - lesson.start) / 60);
@@ -101,11 +168,41 @@ function buildContext(data, settings) {
   return ctx;
 }
 
+/** "Có"/"Không"/TRUE/x… → true/false. */
+function yesNo_(v, def) {
+  var s = removeDiacritics_(str(v)).toLowerCase();
+  if (/^(co|x|true|1|yes|y)$/.test(s)) return true;
+  if (/^(khong|false|0|no|n)$/.test(s)) return false;
+  return def;
+}
+
+/** Tọa độ của 1 bản ghi: cột Vĩ độ/Kinh độ, nếu trống thì đọc từ link Google Maps. */
+function coordsOf_(r) {
+  var lat = toNum(r.lat);
+  var lng = toNum(r.lng);
+  if (lat === null || lng === null) {
+    var p = parseMapsLink(r.mapUrl);
+    if (p) { lat = p.lat; lng = p.lng; }
+  }
+  return { lat: lat, lng: lng };
+}
+
+/** Khóa tọa độ của 1 cặp người–trường (để biết số liệu Google Maps còn đúng không). */
+function coordsKey_(p, s) {
+  function f(n) { return Number(n).toFixed(5); }
+  return f(p.lat) + ',' + f(p.lng) + '|' + f(s.lat) + ',' + f(s.lng);
+}
+
+function hasCoords_(o) {
+  return !!o && o.lat !== null && o.lat !== undefined && o.lng !== null && o.lng !== undefined;
+}
+
 function validateLesson_(ctx, l) {
   if (!ctx.schools[l.school]) return 'Mã trường "' + l.school + '" không có trong danh sách trường';
   if (l.weekday < 0) return 'Thứ không hợp lệ';
   if (l.start === null || l.end === null) return 'Giờ bắt đầu/kết thúc không hợp lệ';
   if (l.end <= l.start) return 'Giờ kết thúc phải sau giờ bắt đầu';
+  if (!l.subject) return 'Chưa xác định chương trình/môn của lớp ' + (l.className || '') + ' (khai báo ở sheet LopHoc hoặc cột Mã môn)';
   return '';
 }
 
@@ -113,23 +210,36 @@ function subjectName_(ctx, code) {
   return ctx.subjects[code] ? ctx.subjects[code].name : code;
 }
 
-/** Khoảng cách nhà GV → trường: ưu tiên số liệu nhập tay, sau đó ước tính theo tọa độ. */
-function teacherSchoolDistance(ctx, tcode, scode) {
-  var key = tcode + '|' + scode;
+/**
+ * Khoảng cách nhà (GV/TG) → trường. Thứ tự ưu tiên nguồn số liệu:
+ *   nhập tay (GV_Truong) → Google Maps xe máy (KhoangCach) → ước tính theo tọa độ.
+ */
+function teacherSchoolDistance(ctx, code, scode) {
+  var key = code + '|' + scode;
   if (ctx.distCache[key]) return ctx.distCache[key];
   var res;
   var link = ctx.links[key];
-  var t = ctx.teachers[tcode];
+  var p = ctx.people[code];
   var s = ctx.schools[scode];
+  var gm = ctx.maps[key];
   if (link && link.distance !== null && link.distance !== undefined) {
     res = { km: link.distance, source: 'manual' };
-  } else if (t && s && t.lat !== null && t.lng !== null && s.lat !== null && s.lng !== null) {
-    res = { km: round1(haversineKm(t.lat, t.lng, s.lat, s.lng) * ctx.S.road_factor), source: 'estimate' };
+  } else if (gm && hasCoords_(p) && hasCoords_(s) && gm.coords === coordsKey_(p, s)) {
+    res = { km: gm.km, minutes: gm.minutes, source: 'maps' };
+  } else if (hasCoords_(p) && hasCoords_(s)) {
+    res = { km: round1(haversineKm(p.lat, p.lng, s.lat, s.lng) * ctx.S.road_factor), source: 'estimate' };
   } else {
     res = { km: null, source: 'unknown' };
   }
   ctx.distCache[key] = res;
   return res;
+}
+
+function distanceLabel_(d, km) {
+  return d.source === 'manual' ? 'Khoảng cách ' + km + ' km'
+    : d.source === 'maps' ? 'Khoảng cách ' + km + ' km (Google Maps, xe máy' + (d.minutes ? ' ~' + Math.round(d.minutes) + ' phút' : '') + ')'
+    : d.source === 'estimate' ? 'Khoảng cách ước tính ~' + km + ' km'
+    : 'Chưa có khoảng cách (tạm tính ' + km + ' km)';
 }
 
 /** Thời gian cần để di chuyển giữa 2 trường (phút). */
@@ -141,7 +251,7 @@ function schoolTravelMinutes(ctx, a, b) {
   var sa = ctx.schools[a];
   var sb = ctx.schools[b];
   var mins = base;
-  if (sa && sb && sa.lat !== null && sa.lng !== null && sb.lat !== null && sb.lng !== null && ctx.S.travel_speed_kmh > 0) {
+  if (hasCoords_(sa) && hasCoords_(sb) && ctx.S.travel_speed_kmh > 0) {
     var km = haversineKm(sa.lat, sa.lng, sb.lat, sb.lng) * ctx.S.road_factor;
     mins = Math.max(base, Math.ceil(km / ctx.S.travel_speed_kmh * 60));
   }
@@ -154,22 +264,32 @@ function isPriority_(ctx, tcode, scode) {
   return !!(l && l.preference === 'priority');
 }
 
-/** Điểm ưu tiên trường có áp dụng cho tiết này không (tùy cấu hình: chỉ khi GV đã được đào tạo môn). */
+/** Điểm ưu tiên trường có áp dụng cho tiết này không (GV: chỉ khi đã được đào tạo chương trình). */
 function priorityApplies_(ctx, t, lesson) {
   if (!isPriority_(ctx, t.code, lesson.school)) return false;
+  if (t.role === 'assistant') return true;
   return !ctx.S.priority_requires_trained || hasSubject_(t, lesson.subject);
 }
 
 function hasSubject_(t, subject) {
+  if (t.role === 'assistant') return true;
   return !subject || t.subjects.indexOf(subject) >= 0;
+}
+
+function roleOf_(role) {
+  return STAFF_ROLES[role] ? role : 'teacher';
+}
+
+function poolOf_(ctx, role) {
+  return ctx[STAFF_ROLES[roleOf_(role)].pool];
 }
 
 /* ------------------------------ Trạng thái ------------------------------ */
 
-function newState(ctx) {
+function newState(ctx, role) {
   var st = {};
-  Object.keys(ctx.teachers).forEach(function (code) {
-    st[code] = { byDay: [[], [], [], [], [], [], []], load: 0, schools: {}, classes: {} };
+  Object.keys(poolOf_(ctx, role)).forEach(function (code) {
+    st[code] = { byDay: emptyWeek_(), load: 0, schools: {}, classes: {} };
   });
   return st;
 }
@@ -198,11 +318,13 @@ function stateRemove(st, tcode, lesson) {
 }
 
 /** Trạng thái từ các phân công hiện có (bỏ qua 1 tiết nếu cần). */
-function stateFromAssignments(ctx, excludeLessonId) {
-  var st = newState(ctx);
+function stateFromAssignments(ctx, excludeLessonId, role) {
+  var field = STAFF_ROLES[roleOf_(role)].field;
+  var st = newState(ctx, role);
   ctx.lessonList.forEach(function (l) {
-    if (l.invalid || !l.teacher || l.id === excludeLessonId || !st[l.teacher]) return;
-    stateAdd(st, l.teacher, l);
+    var code = l[field];
+    if (l.invalid || !code || l.id === excludeLessonId || !st[code]) return;
+    stateAdd(st, code, l);
   });
   return st;
 }
@@ -215,7 +337,7 @@ function staticCheck(ctx, t, lesson) {
   var link = ctx.links[t.code + '|' + lesson.school];
   var priority = link && link.preference === 'priority';
   if (link && link.preference === 'blocked') return 'blocked';
-  if (ctx.S.require_trained_subject && !hasSubject_(t, lesson.subject)) return 'untrained';
+  if (t.role !== 'assistant' && ctx.S.require_trained_subject && !hasSubject_(t, lesson.subject)) return 'untrained';
   if (!priority && ctx.S.max_distance_km > 0) {
     var d = teacherSchoolDistance(ctx, t.code, lesson.school);
     if (d.km !== null && d.km > ctx.S.max_distance_km) return 'too_far';
@@ -224,7 +346,17 @@ function staticCheck(ctx, t, lesson) {
   for (var i = 0; i < un.length; i++) {
     if (overlaps(lesson.start, lesson.end, un[i].start, un[i].end)) return 'unavailable';
   }
+  if (t.free && !insideFree_(t, lesson)) return 'not_free';
   return '';
+}
+
+/** Tiết nằm trọn trong 1 khung giờ rảnh đã đăng ký. */
+function insideFree_(t, lesson) {
+  var slots = t.free[lesson.weekday] || [];
+  for (var i = 0; i < slots.length; i++) {
+    if (slots[i].start <= lesson.start && lesson.end <= slots[i].end) return true;
+  }
+  return false;
 }
 
 /** Ràng buộc phụ thuộc lịch hiện tại của GV. */
@@ -264,25 +396,23 @@ function blockingLessons_(ctx, st, t, lesson) {
 function scoreCandidate(ctx, st, t, lesson) {
   var S = ctx.S;
   var parts = [];
-  if (priorityApplies_(ctx, t, lesson)) parts.push(['Trường ưu tiên xếp của GV', S.w_priority]);
-  else if (isPriority_(ctx, t.code, lesson.school)) parts.push(['Trường ưu tiên (không áp dụng vì chưa đào tạo môn)', 0]);
+  var isTA = t.role === 'assistant';
+  if (priorityApplies_(ctx, t, lesson)) parts.push(['Trường ưu tiên xếp', S.w_priority]);
+  else if (isPriority_(ctx, t.code, lesson.school)) parts.push(['Trường ưu tiên (không áp dụng vì chưa đào tạo chương trình)', 0]);
 
   var d = teacherSchoolDistance(ctx, t.code, lesson.school);
   var km = d.km === null ? S.unknown_distance_km : d.km;
-  var dLabel = d.source === 'manual' ? 'Khoảng cách ' + km + ' km'
-    : d.source === 'estimate' ? 'Khoảng cách ước tính ~' + km + ' km'
-    : 'Chưa có khoảng cách (tạm tính ' + km + ' km)';
-  parts.push([dLabel, -S.w_distance_per_km * km]);
+  parts.push([distanceLabel_(d, km), -(isTA ? S.w_ta_distance_per_km : S.w_distance_per_km) * km]);
 
-  if (lesson.subject) {
-    if (hasSubject_(t, lesson.subject)) parts.push(['Đã được đào tạo môn ' + subjectName_(ctx, lesson.subject), S.w_trained]);
-    else parts.push(['Chưa được đào tạo môn ' + subjectName_(ctx, lesson.subject), 0]);
+  if (!isTA && lesson.subject) {
+    if (hasSubject_(t, lesson.subject)) parts.push(['Đã được đào tạo ' + subjectName_(ctx, lesson.subject), S.require_trained_subject ? 0 : S.w_trained]);
+    else parts.push(['Chưa được đào tạo ' + subjectName_(ctx, lesson.subject), 0]);
   }
 
   var ts = st[t.code];
   var nSchools = Object.keys(ts.schools).length;
   if (ts.schools[lesson.school]) {
-    parts.push(['Đang dạy tại trường này', S.w_same_school]);
+    parts.push([isTA ? 'Đang trợ giảng tại trường này' : 'Đang dạy tại trường này', S.w_same_school]);
     var sameDay = ts.byDay[lesson.weekday].some(function (o) { return o.school === lesson.school && o.id !== lesson.id; });
     if (sameDay) parts.push(['Đã có lịch ở trường này cùng ngày', S.w_same_day_school]);
   } else if (nSchools >= S.preferred_max_schools) {
@@ -293,13 +423,13 @@ function scoreCandidate(ctx, st, t, lesson) {
 
   var newLoad = ts.load + lesson.load;
   if (newLoad <= t.target + 1e-9) {
-    parts.push(['Giờ dạy ' + round1(ts.load) + '/' + t.target + 'h – còn thiếu giờ', S.w_load_balance * (t.target - ts.load) / t.target]);
+    parts.push([(isTA ? 'Giờ trợ giảng ' : 'Giờ dạy ') + round1(ts.load) + '/' + t.target + 'h – còn thiếu giờ', S.w_load_balance * (t.target - ts.load) / t.target]);
   } else {
     var over = newLoad - Math.max(t.target, ts.load);
     parts.push(['Vượt định mức ' + t.target + 'h (lên ' + round1(newLoad) + 'h)', -S.w_over_target_per_hour * over]);
   }
 
-  var lvl = RATING_LEVEL[t.rating] || 0;
+  var lvl = isTA ? 0 : (RATING_LEVEL[t.rating] || 0);
   if (lvl) parts.push(['Xếp loại ' + t.rating, lvl * S.w_rating]);
 
   var total = 0;
@@ -345,19 +475,22 @@ function cmp_() {
 
 /**
  * @param {Object} ctx  ngữ cảnh từ buildContext
- * @param {Object} opts { mode: 'fill' | 'rebuild', schools: [mã trường] (tùy chọn) }
+ * @param {Object} opts { role: 'teacher' | 'assistant', mode: 'fill' | 'rebuild', schools: [mã trường] (tùy chọn) }
  *   - fill: giữ nguyên phân công hiện có, chỉ xếp tiết còn trống.
  *   - rebuild: xếp lại toàn bộ (trừ tiết đã Ghim) trong phạm vi các trường được chọn.
  */
 function runAutoSchedule(ctx, opts) {
   opts = opts || {};
+  var role = roleOf_(opts.role);
+  var field = STAFF_ROLES[role].field;
+  var pool = poolOf_(ctx, role);
   var mode = opts.mode === 'rebuild' ? 'rebuild' : 'fill';
   var scope = null;
   if (opts.schools && opts.schools.length) {
     scope = {};
     opts.schools.forEach(function (s) { scope[String(s).toUpperCase()] = true; });
   }
-  var st = newState(ctx);
+  var st = newState(ctx, role);
   var toSchedule = [];
   var kept = 0;
   var invalid = [];
@@ -366,18 +499,20 @@ function runAutoSchedule(ctx, opts) {
   ctx.lessonList.slice().sort(cmp_(function (l) { return l.id; })).forEach(function (l) {
     if (l.invalid) { invalid.push(l); return; }
     var inScope = !scope || scope[l.school];
-    var hasTeacher = l.teacher && ctx.teachers[l.teacher];
-    if (hasTeacher && (l.locked || mode === 'fill' || !inScope)) {
-      stateAdd(st, l.teacher, l);
+    var cur = l[field];
+    if (cur && pool[cur] && (l.locked || mode === 'fill' || !inScope)) {
+      stateAdd(st, cur, l);
       kept++;
       return;
     }
     if (!inScope) return;
+    if (role === 'assistant' && !l.needAssistant) return;
+    if (role === 'teacher' && !l.needTeacher) return;
     if (!ctx.schools[l.school].active) { skippedInactiveSchool++; return; }
     toSchedule.push(l);
   });
 
-  var teacherList = Object.keys(ctx.teachers).sort().map(function (c) { return ctx.teachers[c]; })
+  var teacherList = Object.keys(pool).sort().map(function (c) { return pool[c]; })
     .filter(function (t) { return t.active; });
 
   // Ứng viên thỏa ràng buộc tĩnh.
@@ -532,10 +667,10 @@ function runAutoSchedule(ctx, opts) {
     var a = assigned[id];
     var l = ctx.lessons[id];
     var phaseNote = a.phase === 1 ? ' [B1: trường ưu tiên]' : a.phase === 3 ? ' [B3: hoán đổi để xếp được]' : a.phase === 4 ? ' [B4: cân bằng giờ dạy]' : '';
-    proposals.push({ lessonId: id, before: l.teacher || '', teacher: a.teacher, score: a.score.total, explain: explainText(a.score) + phaseNote, phase: a.phase });
+    proposals.push({ lessonId: id, role: role, before: l[field] || '', teacher: a.teacher, score: a.score.total, explain: explainText(a.score) + phaseNote, phase: a.phase });
   });
   var unassigned = failed.map(function (l) {
-    return { lessonId: l.id, before: l.teacher || '', reason: unassignedReason_(ctx, st, l, cands[l.id], staticReasons[l.id], teacherList.length) };
+    return { lessonId: l.id, role: role, before: l[field] || '', reason: unassignedReason_(ctx, st, l, cands[l.id], staticReasons[l.id], teacherList.length, role) };
   }).sort(cmp_(function (u) { return u.lessonId; }));
 
   var loads = teacherList.map(function (t) {
@@ -544,6 +679,7 @@ function runAutoSchedule(ctx, opts) {
   });
 
   return {
+    role: role,
     mode: mode,
     proposals: proposals,
     unassigned: unassigned,
@@ -564,33 +700,39 @@ function runAutoSchedule(ctx, opts) {
   };
 }
 
-function unassignedReason_(ctx, st, l, cands, staticReasons, nTeachers) {
+function unassignedReason_(ctx, st, l, cands, staticReasons, nTeachers, role) {
+  var who = role === 'assistant' ? 'TG' : 'GV';
   var counts = {};
   Object.keys(staticReasons).forEach(function (k) { counts[k] = staticReasons[k]; });
   cands.forEach(function (t) {
     var r = dynamicCheck(ctx, st, t, l);
     if (r) counts[r] = (counts[r] || 0) + 1;
   });
-  var order = ['overlap', 'travel', 'max_hours', 'max_schools', 'unavailable', 'too_far', 'untrained', 'blocked'];
+  var order = ['overlap', 'travel', 'max_hours', 'max_schools', 'unavailable', 'not_free', 'too_far', 'untrained', 'blocked'];
   var parts = order.filter(function (k) { return counts[k]; }).map(function (k) {
     var label = REASON_LABELS[k];
     if (k === 'too_far') label += ' (> ' + ctx.S.max_distance_km + ' km)';
     if (k === 'untrained') label += ' ' + subjectName_(ctx, l.subject);
-    return counts[k] + ' GV ' + label.charAt(0).toLowerCase() + label.slice(1);
+    return counts[k] + ' ' + who + ' ' + label.charAt(0).toLowerCase() + label.slice(1);
   });
-  if (!nTeachers) return 'Chưa có giáo viên nào đang hoạt động';
-  return 'Không có GV phù hợp: ' + (parts.join('; ') || 'không rõ');
+  if (!nTeachers) return role === 'assistant' ? 'Chưa có trợ giảng nào đang hoạt động' : 'Chưa có giáo viên nào đang hoạt động';
+  var untrainedAll = role !== 'assistant' && counts.untrained === nTeachers;
+  if (untrainedAll) return 'Chưa có GV nào được đào tạo ' + subjectName_(ctx, l.subject) + ' – cần đào tạo thêm GV';
+  return 'Không có ' + who + ' phù hợp: ' + (parts.join('; ') || 'không rõ');
 }
 
-/** Xếp hạng toàn bộ GV cho 1 tiết (dùng khi gán tay / tìm GV dạy thay). */
-function rankCandidates(ctx, lessonId) {
+/** Xếp hạng toàn bộ GV (hoặc trợ giảng) cho 1 tiết – dùng khi gán tay / tìm người dạy thay. */
+function rankCandidates(ctx, lessonId, role) {
+  role = roleOf_(role);
+  var pool = poolOf_(ctx, role);
+  var field = STAFF_ROLES[role].field;
   var l = ctx.lessons[lessonId];
   if (!l) throw new Error('Không tìm thấy tiết ' + lessonId);
   if (l.invalid) throw new Error('Tiết có dữ liệu lỗi: ' + l.invalid);
-  var st = stateFromAssignments(ctx, lessonId);
+  var st = stateFromAssignments(ctx, lessonId, role);
   var out = [];
-  Object.keys(ctx.teachers).sort().forEach(function (code) {
-    var t = ctx.teachers[code];
+  Object.keys(pool).sort().forEach(function (code) {
+    var t = pool[code];
     if (!t.active) return;
     var reason = staticCheck(ctx, t, l) || dynamicCheck(ctx, st, t, l);
     var sc = scoreCandidate(ctx, st, t, l);
@@ -602,7 +744,7 @@ function rankCandidates(ctx, lessonId) {
       trained: hasSubject_(t, l.subject), priority: isPriority_(ctx, code, l.school),
       distance: d.km, distanceSource: d.source,
       load: round1(st[code].load), target: t.target, max: t.max,
-      schools: Object.keys(st[code].schools).length, current: l.teacher === code,
+      schools: Object.keys(st[code].schools).length, current: l[field] === code, role: role,
     });
   });
   out.sort(function (a, b) {

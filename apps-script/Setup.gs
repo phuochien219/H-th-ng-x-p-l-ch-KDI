@@ -8,6 +8,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Xếp lịch tự động (điền tiết trống)', 'menuAutoSchedule')
     .addItem('Kiểm tra trùng lịch (tô màu sheet TKB)', 'menuHighlightConflicts')
+    .addItem('Cập nhật tọa độ & khoảng cách Google Maps (xe máy)', 'menuUpdateMaps')
     .addSeparator()
     .addItem('Khởi tạo / kiểm tra cấu trúc bảng', 'setupSheets')
     .addItem('Nạp dữ liệu mẫu (XÓA dữ liệu hiện có)', 'menuLoadDemoData')
@@ -56,27 +57,61 @@ function setupSheets() {
       Db.append('users', [{ email: APP.SUPER_ADMIN, name: 'Quản trị gốc', role: 'admin', active: true, addedBy: 'Hệ thống', createdAt: nowString(), lastLogin: '' }]);
     }
     if (!Db.read('subjects').length) Db.append('subjects', DEFAULT_SUBJECTS);
+    migrateLegacyTraining_();
     toast_('Đã khởi tạo cấu trúc dữ liệu.');
     return true;
   });
 }
 
+/** Chương trình STEM mặc định (theo khối lớp, giống TKB thực tế của KDI). */
 var DEFAULT_SUBJECTS = [
-  { code: 'RB', name: 'Robotics', description: 'Lắp ráp & lập trình robot', color: '#e8590c' },
-  { code: 'SCR', name: 'Lập trình Scratch', description: 'Tư duy lập trình kéo thả', color: '#7048e8' },
-  { code: 'PY', name: 'Python & AI', description: 'Lập trình Python, trí tuệ nhân tạo cơ bản', color: '#1c7ed6' },
-  { code: 'KH', name: 'Khoa học STEM', description: 'Thí nghiệm khoa học thực hành', color: '#2f9e44' },
-  { code: 'MK', name: 'Maker – Kỹ thuật', description: 'Thiết kế & chế tạo sản phẩm', color: '#c2255c' },
-  { code: 'IOT', name: 'Điện tử & IoT', description: 'Mạch điện tử, Arduino, IoT', color: '#0c8599' },
+  { code: 'G01', name: 'School - Grade 01', description: 'Chương trình STEM khối 1', color: '#e8590c' },
+  { code: 'G02', name: 'School - Grade 02', description: 'Chương trình STEM khối 2', color: '#f08c00' },
+  { code: 'G03', name: 'School - Grade 03', description: 'Chương trình STEM khối 3', color: '#2f9e44' },
+  { code: 'G04', name: 'School - Grade 04', description: 'Chương trình STEM khối 4', color: '#0c8599' },
+  { code: 'G05', name: 'School - Grade 05', description: 'Chương trình STEM khối 5', color: '#1c7ed6' },
+  { code: 'G06', name: 'School - Grade 06', description: 'Chương trình STEM khối 6', color: '#4263eb' },
+  { code: 'G07', name: 'School - Grade 07', description: 'Chương trình STEM khối 7', color: '#7048e8' },
+  { code: 'G08', name: 'School - Grade 08', description: 'Chương trình STEM khối 8', color: '#ae3ec9' },
+  { code: 'G09', name: 'School - Grade 09', description: 'Chương trình STEM khối 9', color: '#c2255c' },
+  { code: 'GK', name: 'School - Grade .K', description: 'Chương trình K (Tin học/Khoa học máy tính)', color: '#495057' },
 ];
 
+/** Danh sách thả xuống ngay trên các sheet dữ liệu (kể cả mã tham chiếu sang sheet khác). */
+/** Bản 1.0/1.1 lưu "Môn đã đào tạo" trong sheet GiaoVien → chuyển sang GV_DaoTao (1 dòng / GV × môn). */
+function migrateLegacyTraining_() {
+  var sh = Db.sheet('teachers', false);
+  if (!sh || sh.getLastRow() < 2) return 0;
+  var grid = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  var head = grid[0].map(str);
+  var cSub = head.indexOf('Môn đã đào tạo');
+  var cCode = head.indexOf('Mã GV');
+  if (cSub < 0 || cCode < 0) return 0;
+  var have = {};
+  Db.read('training').forEach(function (r) { have[str(r.teacher).toUpperCase() + '|' + str(r.subject).toUpperCase()] = true; });
+  var add = [];
+  for (var r = 1; r < grid.length; r++) {
+    var code = str(grid[r][cCode]).toUpperCase();
+    splitList(grid[r][cSub]).forEach(function (subj) {
+      subj = subj.toUpperCase();
+      if (!code || have[code + '|' + subj]) return;
+      have[code + '|' + subj] = true;
+      add.push({ teacher: code, subject: subj, status: 'Đạt', date: '', notes: 'Chuyển từ cột "Môn đã đào tạo"' });
+    });
+  }
+  Db.append('training', add);
+  return add.length;
+}
+
 function applyValidations_() {
-  var lists = {
-    'TKB.weekday': WEEKDAYS, 'LichBan.weekday': WEEKDAYS,
-    'GiaoVien.type': TEACHER_TYPES, 'GiaoVien.rating': RATINGS,
-    'GV_Truong.preference': PREFERENCES, 'NguoiDung.role': Object.keys(ROLES),
-    'TruongHoc.level': TABLES.schools.columns.filter(function (c) { return c.key === 'level'; })[0].options,
-  };
+  var codeRanges = {};
+  ['schools', 'teachers', 'assistants', 'subjects'].forEach(function (t) {
+    var sh = Db.sheet(t, true);
+    var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(str);
+    var col = headers.indexOf(TABLES[t].columns[0].header) + 1;
+    codeRanges[t] = sh.getRange(2, col, Math.max(sh.getMaxRows() - 1, 1), 1);
+  });
+  var refSource = { school: 'schools', teacher: 'teachers', assistant: 'assistants', subject: 'subjects' };
   Object.keys(TABLES).forEach(function (table) {
     var d = TABLES[table];
     var sh = Db.sheet(table, true);
@@ -86,10 +121,14 @@ function applyValidations_() {
       var col = headers.indexOf(c.header) + 1;
       if (col < 1) return;
       var range = sh.getRange(2, col, maxRows, 1);
-      var list = lists[d.sheet + '.' + c.key];
+      var list = c.type === 'weekday' ? WEEKDAYS : (table === 'users' && c.key === 'role') ? Object.keys(ROLES) : c.options;
       // Ô checkbox (cột kiểu bool) được tạo khi thêm dòng (Db.append) – không chèn cho cả
       // cột vì Sheets sẽ ghi FALSE vào mọi ô trống và làm sai vị trí dòng cuối.
-      if (list) range.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(list, true).setAllowInvalid(true).build());
+      if (list) {
+        range.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(list, true).setAllowInvalid(true).build());
+      } else if (refSource[c.type] && refSource[c.type] !== table) {
+        range.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(codeRanges[refSource[c.type]], true).setAllowInvalid(true).build());
+      }
     });
   });
 }
@@ -165,12 +204,9 @@ function menuLoadDemoData() {
 function loadDemoData_() {
   var demo = buildDemoData(20260901);
   withLock_(function () {
-    Db.replaceAll('subjects', demo.subjects);
-    Db.replaceAll('schools', demo.schools);
-    Db.replaceAll('teachers', demo.teachers);
-    Db.replaceAll('links', demo.links);
-    Db.replaceAll('unavailability', demo.unavailability);
-    Db.replaceAll('lessons', demo.lessons);
+    ['subjects', 'schools', 'classes', 'teachers', 'training', 'assistants', 'assistantFree', 'links', 'unavailability', 'lessons']
+      .forEach(function (t) { Db.replaceAll(t, demo[t]); });
+    Db.replaceAll('distances', []);
     Db.replaceAll('runs', []);
     Db.replaceAll('runItems', []);
   });
@@ -190,7 +226,7 @@ function mulberry32_(seed) {
   };
 }
 
-/** Sinh dữ liệu mẫu (TP.HCM) – hàm thuần, cùng seed cho cùng kết quả. */
+/** Sinh dữ liệu mẫu (Hà Nội) – hàm thuần, cùng seed cho cùng kết quả. */
 function buildDemoData(seed) {
   var rnd = mulberry32_(seed || 1);
   function pick(arr) { return arr[Math.floor(rnd() * arr.length)]; }
@@ -204,129 +240,151 @@ function buildDemoData(seed) {
     }
     return arr;
   }
+  function mapUrl(lat, lng) { return 'https://www.google.com/maps?q=' + lat + ',' + lng; }
 
   var districts = [
-    ['Quận 1', 10.7769, 106.7009], ['Quận 3', 10.7843, 106.6844], ['Quận 4', 10.7579, 106.7013],
-    ['Quận 5', 10.7540, 106.6634], ['Quận 6', 10.7480, 106.6352], ['Quận 7', 10.7340, 106.7218],
-    ['Quận 8', 10.7240, 106.6286], ['Quận 10', 10.7746, 106.6670], ['Quận 11', 10.7629, 106.6503],
-    ['Quận 12', 10.8672, 106.6413], ['Bình Thạnh', 10.8106, 106.7091], ['Gò Vấp', 10.8387, 106.6653],
-    ['Phú Nhuận', 10.7991, 106.6802], ['Tân Bình', 10.8015, 106.6527], ['Tân Phú', 10.7918, 106.6283],
-    ['Bình Tân', 10.7653, 106.6037], ['TP Thủ Đức', 10.8494, 106.7537], ['Nhà Bè', 10.6950, 106.7046],
+    ['Ba Đình', 21.0350, 105.8190], ['Hoàn Kiếm', 21.0285, 105.8542], ['Đống Đa', 21.0180, 105.8290],
+    ['Hai Bà Trưng', 21.0060, 105.8580], ['Hoàng Mai', 20.9740, 105.8630], ['Thanh Xuân', 20.9930, 105.8110],
+    ['Cầu Giấy', 21.0330, 105.7940], ['Long Biên', 21.0470, 105.8890], ['Tây Hồ', 21.0680, 105.8200],
+    ['Nam Từ Liêm', 21.0130, 105.7650], ['Bắc Từ Liêm', 21.0700, 105.7600], ['Hà Đông', 20.9710, 105.7790],
+    ['Đông Anh', 21.1370, 105.8490], ['Gia Lâm', 21.0280, 105.9380],
   ];
-  var subjects = DEFAULT_SUBJECTS.map(function (s) { return Object.assign({}, s); });
-  var subjectCodes = subjects.map(function (s) { return s.code; });
+  var subjects = DEFAULT_SUBJECTS.map(function (x) { return Object.assign({}, x); });
+  var primary = ['G01', 'G02', 'G03', 'G04', 'G05'];
+  var secondary = ['G06', 'G07', 'G08', 'G09'];
 
-  var famous = ['Nguyễn Bỉnh Khiêm', 'Lê Quý Đôn', 'Trần Hưng Đạo', 'Lê Lợi', 'Nguyễn Du', 'Chu Văn An', 'Võ Thị Sáu',
-    'Nguyễn Trãi', 'Lý Thường Kiệt', 'Hai Bà Trưng', 'Kim Đồng', 'Nguyễn Thị Minh Khai', 'Phan Chu Trinh', 'Lương Thế Vinh',
-    'Trần Quốc Toản', 'Đinh Tiên Hoàng', 'Nguyễn Văn Trỗi', 'Phan Bội Châu', 'Hồ Văn Huê', 'Lê Văn Tám', 'Ngô Quyền',
-    'Hùng Vương', 'Quang Trung', 'Nguyễn Huệ', 'Tô Hiến Thành', 'Lạc Long Quân', 'Âu Cơ', 'Bế Văn Đàn', 'Cao Bá Quát',
-    'Đoàn Thị Điểm', 'Huỳnh Thúc Kháng', 'Mạc Đĩnh Chi', 'Nguyễn Khuyến', 'Phạm Ngũ Lão', 'Trần Đại Nghĩa', 'Yết Kiêu'];
-
+  var names = ['Kim Đồng', 'Chu Văn An', 'Nguyễn Tri Phương', 'Ái Mộ A', 'Đô Thị Việt Hưng', 'Việt Nam - Cuba', 'Tràng An',
+    'Hoàng Mai', 'Đô thị Sài Đồng', 'Tây Mỗ 3', 'Nguyễn Trung Trực', 'Lý Thường Kiệt', 'Thăng Long', 'Đoàn Thị Điểm', 'Nam Thành Công',
+    'Dịch Vọng', 'Yên Hòa', 'Lê Ngọc Hân', 'Phúc Xá', 'Giảng Võ', 'Phúc Lợi', 'Phương Canh', 'Nguyễn Quý Đức', 'Sài Đồng',
+    'Trung Văn', 'Đại Mỗ', 'Ngọc Lâm', 'Mỹ Đình 1', 'Mỹ Đình 2', 'Nguyễn Bỉnh Khiêm', 'Phan Bội Châu', 'Nguyễn Gia Thiều',
+    'Lê Quý Đôn', 'Cát Linh', 'Nguyễn Huy Tưởng', 'Lý Nam Đế', 'Nguyễn Trường Tộ', 'Đại Kim', 'Ngô Quyền', 'Tây Mỗ',
+    'Thanh Xuân Trung', 'Khương Đình', 'Định Công', 'Hoàng Liệt', 'Đông Anh'];
   var schools = [];
-  for (var i = 1; i <= 72; i++) {
-    var d = districts[(i * 7) % districts.length];
-    var level = rnd() < 0.68 ? 'Tiểu học' : 'THCS';
+  names.forEach(function (n, i) {
+    var d = districts[(i * 5) % districts.length];
+    var th = i < 21;
+    var lat = jitter(d[1], 0.015);
+    var lng = jitter(d[2], 0.015);
     schools.push({
-      code: 'TR' + pad(i, 3), name: (level === 'Tiểu học' ? 'TH ' : 'THCS ') + famous[(i - 1) % famous.length] + (i > famous.length ? ' ' + d[0].replace('Quận ', 'Q') : ''),
-      level: level, address: between(1, 300) + ' đường số ' + between(1, 40) + ', ' + d[0], district: d[0],
-      lat: jitter(d[1], 0.018), lng: jitter(d[2], 0.018), contact: 'Cô ' + pick(['Lan', 'Hoa', 'Mai', 'Hương', 'Thảo', 'Ngọc']),
-      phone: '09' + between(10000000, 99999999), sale: pick(['sale1@kdi.edu.vn', 'sale2@kdi.edu.vn', 'sale3@kdi.edu.vn']),
-      notes: '', active: true,
+      code: 'TR' + pad(i + 1, 3), name: (th ? 'TH ' : 'THCS ') + n, level: th ? 'Tiểu học' : 'THCS',
+      mapUrl: mapUrl(lat, lng), address: 'Phường ' + pick(['Láng Hạ', 'Kim Mã', 'Dịch Vọng', 'Bồ Đề', 'Mỹ Đình', 'Văn Quán', 'Định Công']) + ', ' + d[0],
+      district: d[0], lat: lat, lng: lng, contact: 'Cô ' + pick(['Lan', 'Hoa', 'Mai', 'Hương', 'Thảo', 'Ngọc']),
+      phone: '09' + between(10000000, 99999999), sale: pick(['sale1@kdi.edu.vn', 'sale2@kdi.edu.vn']), notes: '', active: true,
     });
-  }
+  });
 
-  var families = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Huỳnh', 'Phan', 'Vũ', 'Võ', 'Đặng', 'Bùi', 'Đỗ', 'Hồ', 'Ngô', 'Dương', 'Lý'];
-  var middles = ['Văn', 'Thị', 'Minh', 'Ngọc', 'Hoàng', 'Thanh', 'Đức', 'Quốc', 'Thu', 'Anh', 'Hữu', 'Gia'];
-  var givens = ['An', 'Bình', 'Châu', 'Dũng', 'Giang', 'Hà', 'Hải', 'Hiếu', 'Hùng', 'Khoa', 'Lan', 'Linh', 'Long', 'Mai', 'Nam',
-    'Nhi', 'Phong', 'Phúc', 'Quân', 'Quỳnh', 'Sơn', 'Tâm', 'Thảo', 'Thịnh', 'Trang', 'Trí', 'Tú', 'Tuấn', 'Vy', 'Yến'];
-  var teachers = [];
-  var unavailability = [];
-  for (var k = 1; k <= 110; k++) {
+  // Lớp học & chương trình: TH học G01–G05, THCS học G06–G09; một số trường học chương trình K.
+  var classes = [];
+  schools.forEach(function (s, i) {
+    var grades = s.level === 'Tiểu học' ? primary : secondary;
+    var useK = s.level === 'THCS' && i % 4 === 0;
+    shuffle(grades.slice()).slice(0, between(2, grades.length)).sort().forEach(function (subj) {
+      var g = Number(subj.slice(1));
+      var n = between(3, 6);
+      for (var k = 1; k <= n; k++) {
+        classes.push({ school: s.code, className: g + 'A' + k, grade: String(g), subject: useK ? 'GK' : subj,
+          needAssistant: rnd() < 0.85 ? 'Có' : 'Không', students: between(30, 45), notes: '' });
+      }
+    });
+  });
+
+  var families = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Vũ', 'Phan', 'Đặng', 'Bùi', 'Đỗ', 'Ngô', 'Dương', 'Đinh', 'Lương'];
+  var middles = ['Thị', 'Văn', 'Thu', 'Thanh', 'Minh', 'Ngọc', 'Hồng', 'Khánh', 'Bảo', 'Phương'];
+  var givens = ['Anh', 'Chi', 'Dung', 'Giang', 'Hà', 'Hằng', 'Hiền', 'Hương', 'Linh', 'Mai', 'My', 'Nga', 'Nhung', 'Phương',
+    'Thảo', 'Trang', 'Tú', 'Vân', 'Yến', 'Huyền', 'Tâm', 'Hải', 'Nam', 'Sơn', 'Tuấn'];
+  function person(prefix, k) {
     var fam = pick(families);
     var giv = pick(givens);
-    var dd = districts[Math.floor(rnd() * districts.length)];
+    var d = districts[Math.floor(rnd() * districts.length)];
+    var lat = jitter(d[1], 0.02);
+    var lng = jitter(d[2], 0.02);
+    return {
+      code: prefix + pad(k, 3), name: fam + ' ' + pick(middles) + ' ' + giv,
+      email: removeDiacritics_(giv).toLowerCase() + '.' + removeDiacritics_(fam).toLowerCase() + '.' + prefix.toLowerCase() + pad(k, 3) + '@kdi.edu.vn',
+      phone: '09' + between(10000000, 99999999), mapUrl: mapUrl(lat, lng),
+      address: 'Ngõ ' + between(1, 300) + ' ' + pick(['Xuân Thủy', 'Nguyễn Trãi', 'Giải Phóng', 'Nguyễn Văn Cừ', 'Láng', 'Trần Duy Hưng']) + ', ' + d[0],
+      district: d[0], lat: lat, lng: lng,
+    };
+  }
+
+  var teachers = [];
+  var training = [];
+  var unavailability = [];
+  for (var k = 1; k <= 80; k++) {
+    var t = person('GV', k);
     var partTime = k % 3 === 0;
-    var nSub = between(2, 4);
-    var subs = [];
-    while (subs.length < nSub) {
-      var sc = subjectCodes[Math.floor(rnd() * subjectCodes.length)];
-      if (subs.indexOf(sc) < 0) subs.push(sc);
-    }
     var r = rnd();
-    var code = 'GV' + pad(k, 3);
-    teachers.push({
-      code: code, name: fam + ' ' + pick(middles) + ' ' + giv,
-      email: removeDiacritics_(giv).toLowerCase() + '.' + removeDiacritics_(fam).toLowerCase() + pad(k, 3) + '@kdi.edu.vn',
-      phone: '09' + between(10000000, 99999999), type: partTime ? 'Kiêm nhiệm' : 'Thường',
-      rating: r < 0.2 ? 'A' : r < 0.65 ? 'B' : r < 0.95 ? 'C' : 'D',
-      address: between(1, 500) + ' ' + pick(['Lê Văn Sỹ', 'CMT8', 'Nguyễn Văn Cừ', 'Phan Xích Long', 'Quang Trung', 'Lý Thường Kiệt']) + ', ' + dd[0],
-      district: dd[0], lat: jitter(dd[1], 0.02), lng: jitter(dd[2], 0.02), subjects: subs.join(', '),
-      targetHours: '', maxHours: '', maxSchools: '', notes: partTime ? 'Kiêm nhiệm công tác văn phòng' : '', active: k !== 110,
+    teachers.push(Object.assign(t, {
+      type: partTime ? 'Kiêm nhiệm' : 'Thường', rating: r < 0.2 ? 'A' : r < 0.65 ? 'B' : r < 0.95 ? 'C' : 'D',
+      targetHours: '', maxHours: '', maxSchools: '', notes: partTime ? 'Kiêm nhiệm công tác văn phòng' : '', active: k !== 80,
+    }));
+    // GV tiểu học (k lẻ) được đào tạo các khối 1–5, GV THCS được đào tạo khối 6–9 / K.
+    var pool = k % 2 === 1 ? primary : secondary.concat(['GK']);
+    shuffle(pool.slice()).slice(0, between(2, pool.length)).forEach(function (subj) {
+      training.push({ teacher: t.code, subject: subj, status: rnd() < 0.93 ? 'Đạt' : 'Đang đào tạo', date: '2025-0' + between(6, 9) + '-15', notes: '' });
     });
     if (partTime) {
-      // GV kiêm nhiệm bận 2 buổi trong tuần.
-      var days = [between(0, 4), between(0, 4)];
-      days.forEach(function (wd, j) {
-        if (j === 1 && wd === days[0]) return;
-        var morning = rnd() < 0.5;
-        unavailability.push({ id: 'LB-' + pad(unavailability.length + 1, 6), teacher: code, weekday: WEEKDAYS[wd],
-          start: morning ? '07:00' : '13:00', end: morning ? '11:30' : '17:00', reason: 'Công tác văn phòng' });
-      });
+      var wd = between(0, 4);
+      var morning = rnd() < 0.5;
+      unavailability.push({ id: 'LB-' + pad(unavailability.length + 1, 6), teacher: t.code, weekday: WEEKDAYS[wd],
+        start: morning ? '07:00' : '13:00', end: morning ? '11:30' : '17:00', reason: 'Công tác văn phòng' });
     }
   }
 
-  // Trường ưu tiên & khoảng cách: 45 GV có 1–2 trường ưu tiên trong số trường gần nhà.
-  var links = [];
-  teachers.slice(0, 100).forEach(function (t, idx) {
-    if (idx % 2 === 1 && idx > 10) return;
-    var near = schools.map(function (s) { return { s: s, d: haversineKm(t.lat, t.lng, s.lat, s.lng) }; })
-      .sort(function (a, b) { return a.d - b.d; }).slice(0, 5);
-    var n = idx % 3 === 0 ? 2 : 1;
-    for (var j = 0; j < n; j++) {
-      var e = near[between(0, 4)];
-      if (links.some(function (l) { return l.teacher === t.code && l.school === e.s.code; })) continue;
-      links.push({ teacher: t.code, school: e.s.code, distance: round1(e.d * 1.35), preference: 'Ưu tiên', notes: 'Trường đề nghị giữ GV' });
-    }
-  });
-  links.push({ teacher: 'GV007', school: 'TR003', distance: '', preference: 'Không xếp', notes: 'Trường phản hồi chưa phù hợp' });
-  links.push({ teacher: 'GV015', school: 'TR020', distance: '', preference: 'Không xếp', notes: '' });
+  var assistants = [];
+  var assistantFree = [];
+  for (var a = 1; a <= 75; a++) {
+    var ta = person('TG', a);
+    assistants.push(Object.assign(ta, { targetHours: '', maxHours: '', maxSchools: '', notes: rnd() < 0.5 ? 'Sinh viên' : '', active: true }));
+    shuffle([0, 1, 2, 3, 4]).slice(0, between(3, 5)).sort().forEach(function (wd) {
+      var kind = pick(['sáng', 'chiều', 'cả ngày', 'cả ngày']);
+      var start = kind === 'chiều' ? '13:00' : '07:00';
+      var end = kind === 'sáng' ? '11:45' : '17:00';
+      assistantFree.push({ id: 'LR-' + pad(assistantFree.length + 1, 6), assistant: ta.code, weekday: WEEKDAYS[wd], start: start, end: end, notes: 'Rảnh ' + kind });
+    });
+  }
 
-  // Thời khóa biểu STEM: mỗi trường 1–2 môn, 10–30 lớp, mỗi lớp 1 tiết/tuần.
-  var thSlots = [[450, 485], [495, 530], [555, 590], [600, 635], [840, 875], [885, 920], [930, 965]];
-  var thcsSlots = [[420, 465], [470, 515], [530, 575], [580, 625], [810, 855], [860, 905], [915, 960]];
+  // Trường ưu tiên: ~1/3 GV có 1 trường ưu tiên gần nhà dạy đúng chương trình đã đào tạo.
+  var links = [];
+  teachers.forEach(function (t, idx) {
+    if (idx % 3 !== 0) return;
+    var trained = training.filter(function (x) { return x.teacher === t.code && x.status === 'Đạt'; }).map(function (x) { return x.subject; });
+    var near = schools.map(function (s) { return { s: s, d: haversineKm(t.lat, t.lng, s.lat, s.lng) }; })
+      .filter(function (x) { return classes.some(function (c) { return c.school === x.s.code && trained.indexOf(c.subject) >= 0; }); })
+      .sort(function (p, q) { return p.d - q.d; });
+    if (near.length) links.push({ teacher: t.code, school: near[0].s.code, preference: 'Ưu tiên', distance: '', notes: 'Trường đề nghị giữ GV' });
+  });
+  links.push({ teacher: 'GV007', school: 'TR003', preference: 'Không xếp', distance: '', notes: 'Trường phản hồi chưa phù hợp' });
+
+  // Thời khóa biểu: mỗi lớp 1 buổi/tuần (một số lớp 2 tiết gộp).
+  var thSlots = [[460, 495], [500, 535], [560, 595], [620, 655], [810, 845], [850, 885], [905, 940], [950, 985]];
+  var thcsSlots = [[450, 495], [505, 550], [565, 610], [620, 665], [820, 865], [875, 920], [935, 980]];
   var lessons = [];
   schools.forEach(function (s) {
-    var primary = s.level === 'Tiểu học';
-    var slots = primary ? thSlots : thcsSlots;
-    var grades = primary ? [1, 2, 3, 4, 5] : [6, 7, 8, 9];
-    var subA = pick(subjectCodes);
-    var subB = pick(subjectCodes);
-    var nClasses = between(10, 30);
-    var rooms = nClasses > 18 ? 2 : 1;
-    var dayList = shuffle([0, 1, 2, 3, 4]).slice(0, between(3, 5)).sort();
-    if (rnd() < 0.15) dayList.push(5);
+    var mine = classes.filter(function (c) { return c.school === s.code; });
+    var slots = s.level === 'Tiểu học' ? thSlots : thcsSlots;
+    var days = shuffle([0, 1, 2, 3, 4]).slice(0, between(2, 4)).sort();
     var cells = [];
-    dayList.forEach(function (wd) {
-      slots.forEach(function (sl, si) {
-        for (var room = 1; room <= rooms; room++) cells.push({ wd: wd, sl: sl, si: si, room: room });
+    days.forEach(function (wd) { slots.forEach(function (sl, si) { cells.push({ wd: wd, sl: sl, si: si }); }); });
+    shuffle(cells);
+    mine.forEach(function (c, i) {
+      var cell = cells[i % cells.length];
+      var double = rnd() < 0.08 && cell.si + 1 < slots.length;
+      lessons.push({
+        id: '', school: s.code, weekday: WEEKDAYS[cell.wd], start: fmtTime(cell.sl[0]),
+        end: fmtTime(double ? slots[cell.si + 1][1] : cell.sl[1]), className: c.className, grade: c.grade,
+        subject: '', periods: double ? 2 : 1, room: 'Phòng STEM', teacher: '', needAssistant: '', assistant: '', locked: false,
+        source: '', explain: '', explainTA: '', notes: '', updatedAt: '', updatedBy: 'demo',
       });
     });
-    shuffle(cells);
-    for (var c = 0; c < nClasses && c < cells.length; c++) {
-      var g = grades[c % grades.length];
-      var cell = cells[c];
-      lessons.push({
-        id: '', school: s.code, weekday: WEEKDAYS[cell.wd], start: fmtTime(cell.sl[0]), end: fmtTime(cell.sl[1]),
-        className: g + 'A' + (Math.floor(c / grades.length) + 1), grade: String(g), subject: c % 3 === 2 ? subB : subA,
-        periods: 1, room: 'STEM ' + cell.room, teacher: '', locked: false, source: '', explain: '', notes: '',
-        updatedAt: '', updatedBy: 'demo',
-      });
-    }
   });
-  lessons.sort(function (a, b) {
-    return a.school < b.school ? -1 : a.school > b.school ? 1 : parseWeekday(a.weekday) - parseWeekday(b.weekday) || parseTime(a.start) - parseTime(b.start);
+  lessons.sort(function (x, y) {
+    return x.school < y.school ? -1 : x.school > y.school ? 1 : parseWeekday(x.weekday) - parseWeekday(y.weekday) || parseTime(x.start) - parseTime(y.start);
   });
   lessons.forEach(function (l, i) { l.id = 'TKB-' + pad(i + 1, 6); });
 
-  return { subjects: subjects, schools: schools, teachers: teachers, links: links, unavailability: unavailability, lessons: lessons };
+  return {
+    subjects: subjects, schools: schools, classes: classes, teachers: teachers, training: training,
+    assistants: assistants, assistantFree: assistantFree, links: links, unavailability: unavailability, lessons: lessons,
+  };
 }

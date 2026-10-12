@@ -74,10 +74,14 @@ function resolveUser_(token) {
   };
 }
 
+/** GV hoặc trợ giảng có email này (để tự nhận diện "Lịch của tôi"). */
 function findTeacherByEmail_(email) {
-  var rows = Db.read('teachers');
-  for (var i = 0; i < rows.length; i++) {
-    if (normEmail(rows[i].email) === email) return rows[i];
+  var tables = ['teachers', 'assistants'];
+  for (var k = 0; k < tables.length; k++) {
+    var rows = Db.read(tables[k]);
+    for (var i = 0; i < rows.length; i++) {
+      if (normEmail(rows[i].email) === email) return rows[i];
+    }
   }
   return null;
 }

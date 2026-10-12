@@ -151,7 +151,7 @@ class FakeSheet {
 let ssCounter = 0;
 class FakeSpreadsheet {
   constructor(name) {
-    this.id = 'ss' + (++ssCounter);
+    this.id = '1FakeSheet' + String(++ssCounter).padStart(30, '0');
     this.name = name || 'Untitled';
     this.sheets = [];
     this.editors = [];
@@ -216,7 +216,7 @@ function createGasEnv(opts) {
         return s;
       },
       newDataValidation: () => {
-        const b = { requireValueInList: () => b, setAllowInvalid: () => b, build: () => ({}) };
+        const b = { requireValueInList: () => b, requireValueInRange: () => b, setAllowInvalid: () => b, build: () => ({}) };
         return b;
       },
       getUi: () => { throw new Error('Cannot call SpreadsheetApp.getUi() from this context.'); },
@@ -258,6 +258,48 @@ function createGasEnv(opts) {
     MailApp: {
       sendEmail: (m) => { env.sentMail.push(m); },
       getRemainingDailyQuota: () => 100,
+    },
+    // Google Maps giả lập: quãng đường = đường chim bay × 1,25; 1 km ≈ 3 phút xe máy.
+    Maps: {
+      DirectionFinder: { Mode: { DRIVING: 'driving' }, Avoid: { HIGHWAYS: 'highways' } },
+      newDirectionFinder: () => {
+        const q = {};
+        const f = {
+          setOrigin: (lat, lng) => { q.o = [lat, lng]; return f; },
+          setDestination: (lat, lng) => { q.d = [lat, lng]; return f; },
+          setMode: () => f,
+          setAvoid: (a) => { q.avoid = a; return f; },
+          getDirections: () => {
+            env.mapsCalls = (env.mapsCalls || 0) + 1;
+            if (env.mapsQuota !== undefined && env.mapsCalls > env.mapsQuota) throw new Error('Service invoked too many times for one day: route.');
+            const R = 6371, rad = Math.PI / 180;
+            const [a1, b1] = q.o, [a2, b2] = q.d;
+            const h = Math.sin((a2 - a1) * rad / 2) ** 2 + Math.cos(a1 * rad) * Math.cos(a2 * rad) * Math.sin((b2 - b1) * rad / 2) ** 2;
+            const km = 2 * R * Math.asin(Math.sqrt(h)) * 1.25;
+            return { status: 'OK', routes: [{ legs: [{ distance: { value: Math.round(km * 1000) }, duration: { value: Math.round(km * 180) } }] }] };
+          },
+        };
+        return f;
+      },
+      newGeocoder: () => {
+        const g = {
+          setRegion: () => g, setLanguage: () => g,
+          geocode: (text) => (env.geocode && env.geocode[text]
+            ? { status: 'OK', results: [{ geometry: { location: env.geocode[text] } }] }
+            : { status: 'ZERO_RESULTS', results: [] }),
+        };
+        return g;
+      },
+    },
+    UrlFetchApp: {
+      fetch: (url) => {
+        const target = (env.redirects || {})[url];
+        return {
+          getHeaders: () => (target ? { Location: target } : {}),
+          getResponseCode: () => (target ? 302 : 200),
+          getContentText: () => '',
+        };
+      },
     },
     ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/a/macros/kdi.edu.vn/s/FAKE/exec' }) },
     HtmlService: {

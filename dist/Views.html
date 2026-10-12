@@ -36,7 +36,7 @@ function viewDashboard(main, param, isCurrent) {
   return call('dashboard').then(function (d) {
     if (!isCurrent()) return;
     var c = d.counts;
-    var pct = c.lessons ? Math.round(c.assigned / c.lessons * 100) : 0;
+    var pct = c.needTeacher ? Math.round(c.assigned / c.needTeacher * 100) : 100;
     var cap = c.capacity ? Math.round(c.totalHours / c.capacity * 100) : 0;
     var actions = '';
     if (can('auto_schedule')) actions += '<button class="btn primary" id="go-auto">🤖 Xếp lịch tự động</button>';
@@ -47,22 +47,23 @@ function viewDashboard(main, param, isCurrent) {
       kpi('Trường đang dạy', c.schools) +
       kpi('Giáo viên', c.teachers, c.fullTime + ' thường · ' + c.partTime + ' kiêm nhiệm') +
       kpi('Tiết STEM/tuần', c.lessons, fmtH(c.totalHours) + ' giờ dạy') +
-      kpi('Đã xếp GV', pct + '%', c.assigned + '/' + c.lessons + ' tiết', pct === 100 ? 'ok' : pct > 90 ? 'warn' : 'err') +
+      kpi('Đã xếp GV', pct + '%', c.assigned + '/' + c.needTeacher + ' tiết cần GV KDI' + (c.schoolTeacher ? ' · ' + c.schoolTeacher + ' tiết GV trường' : ''), pct === 100 ? 'ok' : pct > 90 ? 'warn' : 'err') +
       kpi('Chưa xếp', c.unassigned, c.locked + ' tiết đang ghim', c.unassigned ? 'warn' : 'ok') +
       kpi('Lỗi trùng lịch', c.errors, c.warnings + ' cảnh báo khác', c.errors ? 'err' : 'ok') +
       kpi('Công suất GV', cap + '%', fmtH(c.totalHours) + ' / ' + fmtH(c.capacity) + ' định mức', cap > 95 ? 'err' : cap > 85 ? 'warn' : 'ok') +
       kpi('GV vượt / thiếu giờ', c.overloaded + ' / ' + c.underloaded, 'vượt tối đa / dưới 80% định mức', c.overloaded ? 'err' : '') +
+      kpi('Tiết có trợ giảng', c.withTA + '/' + c.needTA, c.assistants + ' trợ giảng · thiếu ' + c.missingTA + ' tiết', c.missingTA ? 'warn' : 'ok') +
       '</div>' +
       (c.invalid ? '<div class="alert err">Có <b>' + c.invalid + '</b> tiết có dữ liệu lỗi (sai mã trường, thứ, giờ). Xem mục Cảnh báo để sửa.</div>' : '') +
       '<div class="grid cols-2"><div class="card"><h2>Giờ dạy của giáo viên</h2><div class="tabs" id="load-tabs">' +
-      '<button data-f="all" class="active">Tất cả</button><button data-f="over">Vượt định mức</button><button data-f="low">Thiếu giờ</button></div><div id="load-list"></div></div>' +
+      '<button data-f="all" class="active">Tất cả GV</button><button data-f="over">Vượt định mức</button><button data-f="low">Thiếu giờ</button><button data-f="ta">Trợ giảng</button></div><div id="load-list"></div></div>' +
       '<div><div class="card"><h2>⚠️ Cảnh báo nổi bật</h2><div id="top-conf"></div></div>' +
       '<div class="card"><h2>Tiết chưa xếp theo trường</h2><div id="unassigned"></div></div></div></div>' +
-      '<div class="grid cols-2"><div class="card"><h2>Cung – cầu theo môn học</h2><div class="muted" style="margin-bottom:8px">Môn có nhiều giờ/GV đã đào tạo là môn cần ưu tiên đào tạo thêm giáo viên.</div><div id="subjects"></div></div>' +
+      '<div class="grid cols-2"><div class="card"><h2>Cung – cầu theo chương trình</h2><div class="muted" style="margin-bottom:8px">Chương trình có nhiều giờ / GV đã đào tạo là chương trình cần ưu tiên đào tạo thêm giáo viên.</div><div id="subjects"></div></div>' +
       '<div class="card"><h2>Phân bố theo quận/huyện</h2><div class="muted" style="margin-bottom:8px">So sánh nhu cầu (giờ dạy) với số GV sống tại khu vực – gợi ý khu vực cần tuyển thêm.</div><div id="districts"></div></div></div>';
 
     function drawLoads(f) {
-      var list = d.loads.filter(function (l) { return f === 'all' || (f === 'over' ? l.status === 'over' || l.status === 'high' : l.status === 'low' || l.status === 'none'); });
+      var list = f === 'ta' ? d.assistantLoads : d.loads.filter(function (l) { return f === 'all' || (f === 'over' ? l.status === 'over' || l.status === 'high' : l.status === 'low' || l.status === 'none'); });
       $('#load-list').innerHTML = !list.length ? '<div class="empty">Không có giáo viên nào.</div>' :
         '<div class="table-wrap" style="max-height:420px;overflow:auto"><table class="tbl"><thead><tr><th>Giáo viên</th><th style="width:38%">Giờ dạy / định mức</th><th class="num">Trường</th><th></th></tr></thead><tbody>' +
         list.map(function (l) {
@@ -88,7 +89,7 @@ function viewDashboard(main, param, isCurrent) {
       }).join('') + '</tbody></table>';
     $$('#unassigned [data-s]').forEach(function (r) { r.onclick = function () { navigate('schools', r.getAttribute('data-s')); }; });
 
-    $('#subjects').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th>Môn</th><th class="num">Tiết</th><th class="num">Giờ/tuần</th><th class="num">GV đã đào tạo</th><th class="num">Giờ / GV</th><th class="num">Gán GV chưa ĐT</th></tr></thead><tbody>' +
+    $('#subjects').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th>Chương trình</th><th class="num">Tiết</th><th class="num">Giờ/tuần</th><th class="num">GV đã đào tạo</th><th class="num">Giờ / GV</th><th class="num">Gán GV chưa ĐT</th></tr></thead><tbody>' +
       d.subjects.map(function (s) {
         var hot = !s.trained || s.hoursPerTrained > 6;
         return '<tr><td>' + chipSubject({ code: s.subject, name: s.name }) + (hot ? ' <span class="badge err">Cần đào tạo thêm</span>' : '') + '</td><td class="num">' + s.lessons + '</td><td class="num">' + fmtNum(s.hours) +
@@ -130,8 +131,8 @@ function viewModeToggle() {
 function viewTeachers(main, param, isCurrent) {
   return cached('lists', function () { return call('overview.lists'); }).then(function (lists) {
     if (!isCurrent()) return;
-    main.innerHTML = '<div class="page-head"><h1>Lịch dạy theo giáo viên</h1></div><div class="split">' +
-      pickerHtml('Tìm tên / mã GV…', '<select id="pk-type"><option value="">Tất cả loại GV</option><option>Thường</option><option>Kiêm nhiệm</option></select>' +
+    main.innerHTML = '<div class="page-head"><h1>Lịch theo giáo viên & trợ giảng</h1></div><div class="split">' +
+      pickerHtml('Tìm tên / mã GV, TG…', '<select id="pk-type"><option value="">GV & trợ giảng</option><option>Thường</option><option>Kiêm nhiệm</option><option>Trợ giảng</option></select>' +
         '<select id="pk-sort"><option value="name">Sắp theo tên</option><option value="load">Giờ dạy tăng dần</option><option value="loaddesc">Giờ dạy giảm dần</option><option value="conf">Có cảnh báo trước</option></select>') +
       '<div id="detail"></div></div>';
     function drawList() {
@@ -168,14 +169,16 @@ function renderTeacherDetail(el, d, onChange) {
   if (t.phone) info.push('☎ ' + esc(t.phone));
   if (t.address) info.push('🏠 ' + esc(t.address));
   var actions = viewModeToggle() + '<button class="btn sm" id="csv">⬇ CSV</button><button class="btn sm" id="print">🖨 In</button>' +
-    (can('send_email') && d.lessons.length ? '<button class="btn sm" id="mail">✉ Gửi lịch cho GV</button>' : '');
+    (can('send_email') && d.lessons.length ? '<button class="btn sm" id="mail">✉ Gửi lịch qua email</button>' : '');
+  var isTA = t.role === 'assistant';
+  if (t.mapUrl) info.push('<a href="' + esc(t.mapUrl) + '" target="_blank" rel="noopener">📍 Xem nhà trên Google Maps</a>');
   var html = '<div class="card"><div class="page-head" style="margin-bottom:8px"><div><h2 style="margin:0">' + esc(t.name) + ' <small class="muted">' + esc(t.code) + '</small></h2>' +
-    '<div class="stat-line" style="margin-top:6px"><span class="badge primary">GV ' + esc(t.type) + '</span><span class="badge">Xếp loại ' + esc(t.rating) + '</span>' +
+    '<div class="stat-line" style="margin-top:6px"><span class="badge primary">' + (isTA ? 'Trợ giảng' : 'GV ' + esc(t.type)) + '</span>' + (t.rating ? '<span class="badge">Xếp loại ' + esc(t.rating) + '</span>' : '') +
     (t.district ? '<span class="badge">' + esc(t.district) + '</span>' : '') + (t.active ? '' : '<span class="badge err">Ngừng hoạt động</span>') + '</div></div>' +
     '<div class="actions">' + actions + '</div></div>' +
-    '<div style="margin-bottom:8px">' + (t.subjects.length ? t.subjects.map(chipSubject).join('') : '<span class="badge warn">Chưa có môn đã đào tạo</span>') + '</div>' +
+    (isTA ? '' : '<div style="margin-bottom:8px"><small class="muted">Đã được đào tạo: </small>' + (t.subjects.length ? t.subjects.map(chipSubject).join('') : '<span class="badge warn">Chưa được đào tạo chương trình nào</span>') + '</div>') +
     (info.length ? '<div class="muted" style="margin-bottom:8px">' + info.join(' &nbsp;·&nbsp; ') + '</div>' : '') +
-    '<div class="grid cols-3"><div><div class="muted">Giờ dạy / tuần</div><div style="font-size:20px;font-weight:700">' + fmtH(d.load) + ' <small class="muted">/ định mức ' + fmtH(t.target) + ' · tối đa ' + fmtH(t.max) + '</small></div>' + loadBar(d.load, t.target, t.max) + '</div>' +
+    '<div class="grid cols-3"><div><div class="muted">' + (isTA ? 'Giờ trợ giảng / tuần' : 'Giờ dạy / tuần') + '</div><div style="font-size:20px;font-weight:700">' + fmtH(d.load) + ' <small class="muted">/ định mức ' + fmtH(t.target) + ' · tối đa ' + fmtH(t.max) + '</small></div>' + loadBar(d.load, t.target, t.max) + '</div>' +
     '<div><div class="muted">Số trường</div><div style="font-size:20px;font-weight:700">' + d.schools.length + ' <small class="muted">/ tối đa ' + t.maxSchools + '</small></div></div>' +
     '<div><div class="muted">Số tiết</div><div style="font-size:20px;font-weight:700">' + d.lessons.length + '</div></div></div></div>';
   if (d.conflicts.length) {
@@ -190,17 +193,24 @@ function renderTeacherDetail(el, d, onChange) {
       return '<tr class="clickable" data-s="' + esc(s.code) + '"><td>' + (s.priority ? '★ ' : '') + esc(s.name) + '</td><td class="num">' + s.lessons + '</td><td class="num">' + fmtNum(s.hours) + '</td>' +
         (s.distance !== undefined ? '<td class="num">' + (s.distance === null ? '?' : fmtNum(s.distance) + ' km') + '</td>' : '') + '</tr>';
     }).join('') + '</tbody></table>' : '<div class="empty">Chưa có lịch dạy.</div>') + '</div>';
-  html += '<div class="card"><h3>Lịch bận</h3>' + (d.unavailable.length ? d.unavailable.map(function (u) {
-    return '<div>• ' + esc(u.weekdayLabel + ' ' + u.startText + '–' + u.endText) + (u.reason ? ' <small class="muted">(' + esc(u.reason) + ')</small>' : '') + '</div>';
-  }).join('') : '<div class="muted">Không có.</div>');
+  if (isTA) {
+    html += '<div class="card"><h3>Giờ rảnh đã đăng ký</h3>' + (d.free && d.free.length ? d.free.map(function (u) {
+      return '<div>• ' + esc(u.weekdayLabel + ' ' + u.startText + '–' + u.endText) + '</div>';
+    }).join('') : '<div class="muted">Chưa đăng ký giờ rảnh (hệ thống coi như rảnh cả tuần).</div>');
+  } else {
+    html += '<div class="card"><h3>Lịch bận</h3>' + (d.unavailable.length ? d.unavailable.map(function (u) {
+      return '<div>• ' + esc(u.weekdayLabel + ' ' + u.startText + '–' + u.endText) + (u.reason ? ' <small class="muted">(' + esc(u.reason) + ')</small>' : '') + '</div>';
+    }).join('') : '<div class="muted">Không có.</div>');
+  }
   if (d.priorityLinks && d.priorityLinks.length) {
     html += '<h3 style="margin-top:14px">Trường ưu tiên / không xếp</h3>' + d.priorityLinks.map(function (p) {
       return '<span class="badge ' + (p.preference === 'priority' ? 'primary' : 'err') + '" style="margin:2px">' + (p.preference === 'priority' ? '★ ' : '⛔ ') + esc(p.name) + '</span>';
     }).join('');
   }
   if (d.nearestSchools && d.nearestSchools.length) {
-    html += '<h3 style="margin-top:14px">Trường gần nhà nhất</h3><table class="tbl"><tbody>' + d.nearestSchools.map(function (s) {
-      return '<tr><td>' + (s.priority ? '★ ' : '') + esc(s.name) + ' <small class="muted">' + esc(s.district) + '</small></td><td class="num">' + fmtNum(s.distance) + ' km' + (s.source === 'estimate' ? ' <small>~</small>' : '') + '</td></tr>';
+    html += '<h3 style="margin-top:14px">Trường gần nhà nhất <small class="muted">(xe máy)</small></h3><table class="tbl"><tbody>' + d.nearestSchools.map(function (s) {
+      return '<tr><td>' + (s.priority ? '★ ' : '') + esc(s.name) + ' <small class="muted">' + esc(s.district) + '</small></td><td class="num">' + fmtNum(s.distance) + ' km' +
+        (s.source === 'maps' ? ' <small title="Google Maps – xe máy">' + (s.minutes ? s.minutes + ' phút' : 'GM') + '</small>' : s.source === 'estimate' ? ' <small title="Ước tính theo đường chim bay">~</small>' : '') + '</td></tr>';
     }).join('') + '</tbody></table>';
   }
   html += '</div></div>';
@@ -251,17 +261,25 @@ function renderSchoolDetail(el, d) {
   var s = d.school;
   var actions = viewModeToggle() + '<button class="btn sm" id="csv">⬇ CSV</button><button class="btn sm" id="print">🖨 In</button>';
   if (can('edit_timetable')) actions += '<button class="btn sm" id="add">+ Thêm tiết</button><button class="btn sm" id="paste">📋 Dán TKB từ Excel</button>';
-  if (can('auto_schedule') && d.unassigned) actions += '<button class="btn sm primary" id="auto">🤖 Xếp tự động trường này</button>';
+  if (can('auto_schedule') && (d.unassigned || d.missingTA)) actions += '<button class="btn sm primary" id="auto">🤖 Xếp tự động trường này</button>';
   var info = [s.level, s.district, s.address].filter(Boolean).map(esc).join(' · ');
   var contact = [s.contact && 'Liên hệ: ' + s.contact, s.phone && '☎ ' + s.phone, s.sale && 'Sale: ' + s.sale].filter(Boolean).map(esc).join(' &nbsp;·&nbsp; ');
   var html = '<div class="card"><div class="page-head" style="margin-bottom:8px"><div><h2 style="margin:0">' + esc(s.name) + ' <small class="muted">' + esc(s.code) + '</small></h2>' +
-    '<div class="muted">' + info + '</div>' + (contact ? '<div class="muted">' + contact + '</div>' : '') + '</div><div class="actions">' + actions + '</div></div>' +
+    '<div class="muted">' + info + (s.mapUrl ? ' · <a href="' + esc(s.mapUrl) + '" target="_blank" rel="noopener">📍 Google Maps</a>' : '') + '</div>' + (contact ? '<div class="muted">' + contact + '</div>' : '') + '</div><div class="actions">' + actions + '</div></div>' +
     '<div class="stat-line"><span class="badge primary">' + d.lessons.length + ' tiết/tuần</span>' + (d.unassigned ? '<span class="badge warn">' + d.unassigned + ' tiết chưa xếp GV</span>' : '<span class="badge ok">Đã xếp đủ GV</span>') +
     (d.conflicts.length ? '<span class="badge err">' + d.conflicts.length + ' cảnh báo</span>' : '') + (s.active ? '' : '<span class="badge err">Ngừng hợp tác</span>') + '</div>' +
     (s.notes ? '<div class="alert info" style="margin-top:8px">' + esc(s.notes) + '</div>' : '') + '</div>';
   html += '<div class="card"><h3>Giáo viên phụ trách</h3>' + (d.teachers.length ? d.teachers.map(function (t) {
     return '<a href="#" class="chip" data-t="' + esc(t.code) + '">' + esc(t.name) + ' · ' + t.lessons + ' tiết · ' + fmtH(t.hours) + '</a>';
-  }).join('') : '<span class="muted">Chưa có giáo viên.</span>') + '</div>';
+  }).join('') : '<span class="muted">Chưa có giáo viên.</span>') +
+    '<h3 style="margin-top:12px">Trợ giảng</h3>' + (d.assistants.length ? d.assistants.map(function (t) {
+      return '<a href="#" class="chip" data-t="' + esc(t.code) + '">' + esc(t.name) + ' · ' + t.lessons + ' tiết</a>';
+    }).join('') : '<span class="muted">Chưa có trợ giảng.</span>') + (d.missingTA ? ' <span class="badge info">' + d.missingTA + ' tiết thiếu trợ giảng</span>' : '') + '</div>';
+  if (d.classes.length) {
+    html += '<div class="card"><h3>Lớp học & chương trình <small class="muted">(sheet LopHoc)</small></h3>' + d.classes.map(function (c) {
+      return '<span class="chip">' + esc(c.className) + ' · ' + esc(c.subjectName) + (c.needTeacher === 'Không' ? ' · GV trường' : '') + (c.needAssistant === 'Không' ? ' · không TG' : '') + '</span>';
+    }).join('') + '</div>';
+  }
   if (d.conflicts.length) {
     html += '<div class="card"><h3>⚠️ Cảnh báo</h3>' + d.conflicts.map(function (c) { return '<div class="alert ' + (c.severity === 'error' ? 'err' : 'warn') + '" style="margin-bottom:6px"><b>' + esc(c.label) + ':</b> ' + esc(c.message) + '</div>'; }).join('') + '</div>';
   }
@@ -278,12 +296,12 @@ function renderSchoolDetail(el, d) {
   var paste = $('#paste', el); if (paste) paste.onclick = function () { pasteImport(s.code, refresh); };
   var auto = $('#auto', el);
   if (auto) auto.onclick = function () {
-    busy(auto, call('auto.run', { mode: 'fill', schools: [s.code] })).then(function (run) { invalidate(); navigate('auto', run.id); }).catch(showError);
+    busy(auto, call('auto.run', { mode: 'fill', schools: [s.code], roles: ['teacher', 'assistant'] })).then(function (run) { invalidate(); navigate('auto', run.id); }).catch(showError);
   };
 }
 
 /* ============================== Lịch trống ============================== */
-App.freeState = { weekday: 0, from: '', to: '', subject: '', district: '', type: '', school: '', onlyFits: false };
+App.freeState = { weekday: 0, from: '', to: '', subject: '', district: '', type: '', school: '', onlyFits: false, role: 'teacher' };
 function viewFree(main, param, isCurrent) {
   var st = App.freeState;
   var districts = App.boot.lookups.districts || [];
@@ -293,19 +311,21 @@ function viewFree(main, param, isCurrent) {
     '<select id="fr-school">' + schoolOptions(st.school, 'Tại trường (để tính khoảng cách)…') + '</select>' +
     '<select id="fr-subject">' + subjectOptions(st.subject, 'Mọi môn') + '</select>' +
     '<select id="fr-district"><option value="">Mọi quận/huyện</option>' + districts.map(function (x) { return '<option' + (x === st.district ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('') + '</select>' +
+    '<select id="fr-role">' + optionList([['teacher', 'Giáo viên'], ['assistant', 'Trợ giảng']], st.role) + '</select>' +
     '<select id="fr-type"><option value="">Mọi loại GV</option><option' + (st.type === 'Thường' ? ' selected' : '') + '>Thường</option><option' + (st.type === 'Kiêm nhiệm' ? ' selected' : '') + '>Kiêm nhiệm</option></select>' +
     '<label class="check"><input type="checkbox" id="fr-only"' + (st.onlyFits ? ' checked' : '') + '> Chỉ GV rảnh khung giờ này</label></div>' +
     '<div class="legend"><span><i style="background:#e6f6ea"></i>Rảnh</span><span><i style="background:#2d5aa8"></i>Đang dạy</span><span><i style="background:#868e96"></i>Lịch bận</span><span><i style="border:2px solid #f08c00"></i>Khung giờ cần tìm</span></div>' +
     '<div id="free-res">' + spinner() + '</div></div>';
   function read() {
     st.from = $('#fr-from').value; st.to = $('#fr-to').value; st.subject = $('#fr-subject').value; st.district = $('#fr-district').value;
-    st.type = $('#fr-type').value; st.school = $('#fr-school').value; st.onlyFits = $('#fr-only').checked;
+    st.type = $('#fr-type').value; st.school = $('#fr-school').value; st.onlyFits = $('#fr-only').checked; st.role = $('#fr-role').value;
+    $('#fr-type').style.display = $('#fr-subject').style.display = st.role === 'assistant' ? 'none' : '';
   }
   function load() {
     read();
     $('#free-res').innerHTML = spinner();
     var hasRange = st.from && st.to;
-    return call('schedule.free', { weekday: st.weekday, from: hasRange ? st.from : '', to: hasRange ? st.to : '', subject: st.subject, district: st.district, type: st.type, school: st.school }).then(function (res) {
+    return call('schedule.free', { role: st.role, weekday: st.weekday, from: hasRange ? st.from : '', to: hasRange ? st.to : '', subject: st.subject, district: st.district, type: st.type, school: st.school }).then(function (res) {
       if (!isCurrent()) return;
       var span = res.dayEnd - res.dayStart;
       var rows = res.rows.filter(function (r) { return !st.onlyFits || !hasRange || r.fitsRange; });
@@ -332,7 +352,7 @@ function viewFree(main, param, isCurrent) {
   $$('#wd-tabs button').forEach(function (b) {
     b.onclick = function () { st.weekday = Number(b.getAttribute('data-wd')); $$('#wd-tabs button').forEach(function (x) { x.classList.toggle('active', x === b); }); load(); };
   });
-  ['#fr-from', '#fr-to', '#fr-subject', '#fr-district', '#fr-type', '#fr-school', '#fr-only'].forEach(function (id) { $(id).onchange = load; });
+  ['#fr-from', '#fr-to', '#fr-subject', '#fr-district', '#fr-type', '#fr-school', '#fr-only', '#fr-role'].forEach(function (id) { $(id).onchange = load; });
   return load();
 }
 
@@ -383,8 +403,8 @@ function viewLessons(main, param, isCurrent) {
       '<select id="lf-school">' + schoolOptions(f.school, 'Tất cả trường') + '</select>' +
       '<select id="lf-weekday"><option value="">Mọi thứ</option>' + App.boot.weekdays.map(function (w, i) { return '<option value="' + i + '"' + (String(i) === f.weekday ? ' selected' : '') + '>' + esc(w) + '</option>'; }).join('') + '</select>' +
       '<select id="lf-subject">' + subjectOptions(f.subject, 'Mọi môn') + '</select>' +
-      '<select id="lf-teacher">' + teacherOptions(f.teacher, 'Mọi GV') + '</select>' +
-      '<select id="lf-status">' + optionList([['un', 'Chưa xếp GV'], ['conf', 'Có cảnh báo/lỗi'], ['locked', 'Đang ghim'], ['auto', 'Xếp tự động'], ['manual', 'Gán tay']], f.status, 'Mọi trạng thái') + '</select></div>' +
+      '<select id="lf-teacher">' + teacherOptions(f.teacher, 'Mọi GV / TG', 'person') + '</select>' +
+      '<select id="lf-status">' + optionList([['un', 'Chưa xếp GV'], ['noTA', 'Thiếu trợ giảng'], ['conf', 'Có cảnh báo/lỗi'], ['locked', 'Đang ghim'], ['auto', 'Xếp tự động'], ['manual', 'Gán tay']], f.status, 'Mọi trạng thái') + '</select></div>' +
       '<div class="filters" id="ls-bulk" style="display:none"><b id="ls-selcount"></b>' +
       (can('assign') ? '<button class="btn sm" data-bulk="lock">📌 Ghim</button><button class="btn sm" data-bulk="unlock">Bỏ ghim</button>' : '') +
       (can('edit_timetable') ? '<button class="btn sm danger" data-bulk="delete">Xóa</button>' : '') + '</div><div id="ls-table"></div></div>';
@@ -396,13 +416,14 @@ function viewLessons(main, param, isCurrent) {
         if (f.school && l.school !== f.school) return false;
         if (f.weekday !== '' && String(l.weekday) !== f.weekday) return false;
         if (f.subject && l.subject !== f.subject) return false;
-        if (f.teacher && l.teacher !== f.teacher) return false;
-        if (f.status === 'un' && (l.teacher || l.invalid)) return false;
+        if (f.teacher && l.teacher !== f.teacher && l.assistant !== f.teacher) return false;
+        if (f.status === 'noTA' && (!l.needAssistant || l.assistant || l.invalid)) return false;
+        if (f.status === 'un' && (l.teacher || l.invalid || !l.needTeacher)) return false;
         if (f.status === 'conf' && !l.conflict && !l.invalid) return false;
         if (f.status === 'locked' && !l.locked) return false;
         if (f.status === 'auto' && l.source !== 'Tự động') return false;
         if (f.status === 'manual' && l.source !== 'Thủ công') return false;
-        return matches(f.q, [l.id, l.schoolName, l.className, l.teacherName, l.subjectName, l.room]);
+        return matches(f.q, [l.id, l.schoolName, l.className, l.teacherName, l.assistantName, l.subjectName, l.room]);
       });
     }
     function draw() {
@@ -411,11 +432,11 @@ function viewLessons(main, param, isCurrent) {
       var selectable = canAny('assign', 'edit_timetable');
       $('#ls-table').innerHTML = '<div class="muted" style="margin-bottom:6px">' + current.length + ' tiết' + (current.length > limit ? ' (hiển thị ' + limit + ')' : '') + '</div>' +
         (!shown.length ? '<div class="empty">Không có tiết nào.</div>' : '<div class="table-wrap"><table class="tbl"><thead><tr>' + (selectable ? '<th><input type="checkbox" id="ls-all"></th>' : '') +
-        '<th>Trường</th><th>Thứ</th><th>Giờ</th><th>Lớp</th><th>Môn</th><th>Giáo viên</th><th>Trạng thái</th></tr></thead><tbody>' +
+        '<th>Trường</th><th>Thứ</th><th>Giờ</th><th>Lớp</th><th>Chương trình</th><th>Giáo viên</th><th>Trợ giảng</th><th>Trạng thái</th></tr></thead><tbody>' +
         shown.map(function (l) {
           return '<tr class="clickable" data-lesson="' + esc(l.id) + '">' + (selectable ? '<td><input type="checkbox" data-sel="' + esc(l.id) + '"' + (selected[l.id] ? ' checked' : '') + '></td>' : '') +
             '<td>' + esc(l.schoolName) + '<br><small>' + esc(l.id) + '</small></td><td class="nowrap">' + esc(l.weekdayLabel || '?') + '</td><td class="nowrap">' + esc(l.startText) + '–' + esc(l.endText) + '</td>' +
-            '<td>' + esc(l.className) + '</td><td>' + chipSubject({ code: l.subject, name: l.subjectName }) + '</td><td>' + (l.teacher ? esc(l.teacherName) : '–') + '</td><td>' + lessonFlags(l) + '</td></tr>';
+            '<td>' + esc(l.className) + '</td><td>' + chipSubject({ code: l.subject, name: l.subjectName }) + '</td><td>' + (l.teacher ? esc(l.teacherName) : '–') + '</td><td>' + (!l.needAssistant ? '<span class="muted">không cần</span>' : l.assistant ? esc(l.assistantName) : '–') + '</td><td>' + lessonFlags(l) + '</td></tr>';
         }).join('') + '</tbody></table></div>' + (current.length > limit ? '<div style="text-align:center;margin-top:10px"><button class="btn" id="ls-more">Hiện thêm</button></div>' : ''));
       bindLessonClicks($('#ls-table'), shown, function () { renderRoute(); });
       $$('[data-sel]').forEach(function (cb) {
@@ -461,6 +482,8 @@ function viewAuto(main, param, isCurrent) {
       '<div class="grid cols-2"><div class="card"><h2>Chạy xếp lịch</h2>' +
       '<div class="field"><label class="check"><input type="radio" name="mode" value="fill" checked> <b>Điền tiết trống</b> – giữ nguyên các phân công hiện có</label></div>' +
       '<div class="field" style="margin-top:6px"><label class="check"><input type="radio" name="mode" value="rebuild"> <b>Xếp lại toàn bộ</b> – xếp lại mọi tiết (trừ tiết đã 📌 ghim)</label></div>' +
+      '<div class="field" style="margin-top:12px"><label>Xếp cho</label><div class="checks"><label class="check"><input type="checkbox" id="au-r-teacher" checked> Giáo viên</label>' +
+      '<label class="check"><input type="checkbox" id="au-r-assistant" checked> Trợ giảng</label></div></div>' +
       '<div class="field" style="margin-top:12px"><label>Phạm vi trường</label><select id="au-scope"><option value="all">Tất cả trường</option><option value="some">Chọn một số trường…</option></select></div>' +
       '<div id="au-schools" style="display:none;margin-top:8px"><input type="search" id="au-q" placeholder="Lọc trường…" style="margin-bottom:6px"><div class="scroll-box">' +
       App.boot.lookups.schools.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'vi'); }).map(function (s) {
@@ -473,6 +496,8 @@ function viewAuto(main, param, isCurrent) {
       '<li><b>Môn đã được đào tạo</b> được cộng điểm (có thể bật chế độ bắt buộc trong Cấu hình).</li>' +
       '<li><b>Số trường</b>: mỗi GV nên dạy 2 trường, tối đa 3 trường; ưu tiên GV đã dạy ở trường đó.</li>' +
       '<li><b>Cân bằng giờ dạy</b>: hướng tới ~15h/tuần (GV thường) và ~10h/tuần (GV kiêm nhiệm).</li></ol>' +
+      '<p><b>GV chỉ được xếp vào lớp có chương trình mình đã được đào tạo</b> (sheet GV_DaoTao, trạng thái "Đạt").</p>' +
+      '<p><b>Trợ giảng</b>: chỉ xếp trong giờ rảnh đã đăng ký, ưu tiên người ở gần trường nhất (khoảng cách xe máy theo Google Maps), rồi đến người đang hỗ trợ ở trường đó và cân bằng giờ.</p>' +
       '<p class="muted">Ràng buộc luôn được đảm bảo: không trùng giờ, đủ thời gian di chuyển giữa 2 trường, không xếp vào lịch bận, không xếp GV bị "Không xếp" tại trường, không vượt giờ tối đa / số trường tối đa / khoảng cách tối đa. Mỗi phân công đều kèm <b>giải thích điểm số</b>.</p></div></div>' +
       '<div class="card"><h2>Lịch sử chạy</h2>' + (history.length ? '<div class="table-wrap"><table class="tbl"><thead><tr><th>Mã</th><th>Thời gian</th><th>Người chạy</th><th>Chế độ</th><th class="num">Xếp được</th><th class="num">Chưa xếp</th><th>Trạng thái</th><th></th></tr></thead><tbody>' +
       history.map(function (r) {
@@ -487,11 +512,13 @@ function viewAuto(main, param, isCurrent) {
       var mode = $('input[name=mode]:checked').value;
       var schools = $('#au-scope').value === 'some' ? $$('#au-schools input:checked').map(function (c) { return c.value; }) : [];
       if ($('#au-scope').value === 'some' && !schools.length) { toast('Chọn ít nhất 1 trường', 'warn'); return; }
+      var roles = ['teacher', 'assistant'].filter(function (r) { return $('#au-r-' + r).checked; });
+      if (!roles.length) { toast('Chọn GV hoặc trợ giảng', 'warn'); return; }
       var btn = this;
       var go = mode === 'rebuild' ? confirmBox('Chế độ "Xếp lại toàn bộ" sẽ đề xuất thay đổi GV ở các tiết chưa ghim. Bạn vẫn xem trước được trước khi áp dụng. Tiếp tục?', 'Chạy thử') : Promise.resolve(true);
       go.then(function (ok) {
         if (!ok) return;
-        busy(btn, call('auto.run', { mode: mode, schools: schools })).then(function (run) { navigate('auto', run.id); }).catch(showError);
+        busy(btn, call('auto.run', { mode: mode, schools: schools, roles: roles })).then(function (run) { navigate('auto', run.id); }).catch(showError);
       });
     };
   });
@@ -522,8 +549,8 @@ function viewRun(main, id, isCurrent) {
       var onlyChanged = $('#rn-changed').checked;
       if (tab === 'loads') {
         var ls = run.loads.filter(function (l) { return matches(q, [l.teacher, l.name]); }).sort(function (a, b) { return b.load / b.target - a.load / a.target; });
-        $('#rn-body').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th>Giáo viên</th><th style="width:40%">Giờ dạy / định mức</th><th class="num">Số trường</th></tr></thead><tbody>' + ls.map(function (l) {
-          return '<tr><td><b>' + esc(l.name) + '</b> <small>' + esc(l.teacher) + '</small></td><td>' + loadBar(l.load, l.target, l.max) + '<small>' + fmtH(l.load) + ' / ' + fmtH(l.target) + ' (tối đa ' + fmtH(l.max) + ')</small></td><td class="num">' + l.schools + '</td></tr>';
+        $('#rn-body').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th>Người</th><th style="width:40%">Giờ / định mức</th><th class="num">Số trường</th></tr></thead><tbody>' + ls.map(function (l) {
+          return '<tr><td><b>' + esc(l.name) + '</b> <small>' + esc(l.teacher) + (l.role === 'assistant' ? ' · TG' : ' · GV') + '</small></td><td>' + loadBar(l.load, l.target, l.max) + '<small>' + fmtH(l.load) + ' / ' + fmtH(l.target) + ' (tối đa ' + fmtH(l.max) + ')</small></td><td class="num">' + l.schools + '</td></tr>';
         }).join('') + '</tbody></table></div>';
         return;
       }
@@ -531,10 +558,10 @@ function viewRun(main, id, isCurrent) {
         return (!onlyChanged || i.changed) && matches(q, [i.lesson.schoolName, i.lesson.className, i.afterName, i.beforeName, i.lesson.subjectName, i.explain]);
       });
       $('#rn-body').innerHTML = !items.length ? '<div class="empty">Không có dòng nào.</div>' : '<div class="table-wrap"><table class="tbl"><thead><tr><th>Trường</th><th>Thời gian</th><th>Lớp · Môn</th>' +
-        (tab === 'ok' ? '<th>GV hiện tại</th><th>GV đề xuất</th><th class="num">Điểm</th><th>Giải thích</th>' : '<th>GV hiện tại</th><th>Lý do</th>') + '</tr></thead><tbody>' +
+        '<th>Vai trò</th>' + (tab === 'ok' ? '<th>Hiện tại</th><th>Đề xuất</th><th class="num">Điểm</th><th>Giải thích</th>' : '<th>Hiện tại</th><th>Lý do</th>') + '</tr></thead><tbody>' +
         items.slice(0, 800).map(function (i) {
           var l = i.lesson;
-          return '<tr><td>' + esc(l.schoolName) + '</td><td class="nowrap">' + esc((l.weekdayLabel || '') + ' ' + (l.startText || '') + '–' + (l.endText || '')) + '</td><td>' + esc((l.className || '') + ' · ' + (l.subjectName || '')) + '</td>' +
+          return '<tr><td>' + esc(l.schoolName) + '</td><td class="nowrap">' + esc((l.weekdayLabel || '') + ' ' + (l.startText || '') + '–' + (l.endText || '')) + '</td><td>' + esc((l.className || '') + ' · ' + (l.subjectName || '')) + '</td><td>' + esc(i.roleShort || 'GV') + '</td>' +
             (tab === 'ok' ? '<td>' + esc(i.beforeName || '–') + '</td><td><b>' + esc(i.afterName) + '</b>' + (i.changed ? '' : ' <small class="muted">(giữ nguyên)</small>') + '</td><td class="num score">' + fmtNum(i.score) + '</td><td class="explain">' + esc(i.explain) + '</td>'
               : '<td>' + esc(i.beforeName || '–') + '</td><td class="explain">' + esc(i.explain) + '</td>') + '</tr>';
         }).join('') + '</tbody></table></div>' + (items.length > 800 ? '<div class="muted">Hiển thị 800/' + items.length + ' dòng – dùng ô tìm kiếm để lọc.</div>' : '');
@@ -574,30 +601,40 @@ function viewRun(main, id, isCurrent) {
 }
 
 /* =========================== Danh mục dữ liệu =========================== */
-var DATA_TABS = [['teachers', 'Giáo viên'], ['schools', 'Trường học'], ['subjects', 'Môn học'], ['links', 'Trường ưu tiên & khoảng cách'], ['unavailability', 'Lịch bận GV']];
+var DATA_TABS = [['schools', 'Trường học'], ['classes', 'Lớp & chương trình'], ['subjects', 'Chương trình'], ['teachers', 'Giáo viên'], ['training', 'GV đã đào tạo'],
+  ['matrix', 'Ma trận đào tạo'], ['assistants', 'Trợ giảng'], ['assistantFree', 'Giờ rảnh TG'], ['links', 'Trường ưu tiên'], ['unavailability', 'Lịch bận GV'], ['distances', 'Khoảng cách Google Maps']];
+var PERSONAL_TABS = { links: true, unavailability: true, distances: true };
 function viewData(main, param, isCurrent) {
-  var tabs = DATA_TABS.filter(function (t) { return (t[0] !== 'links' && t[0] !== 'unavailability') || can('view_personal'); });
+  var tabs = DATA_TABS.filter(function (t) { return !PERSONAL_TABS[t[0]] || can('view_personal'); });
   var table = tabs.some(function (t) { return t[0] === param; }) ? param : tabs[0][0];
+  if (table === 'matrix') return viewTrainingMatrix(main, tabs, isCurrent);
   return call('data.list', { table: table }).then(function (d) {
     if (!isCurrent()) return;
     var hints = {
-      teachers: 'Loại GV quyết định định mức giờ (Thường 15h, Kiêm nhiệm 10h). "Giờ định mức / Giờ tối đa / Số trường tối đa" để trống = theo Cấu hình. Tọa độ nhà dùng để ước tính khoảng cách.',
-      schools: 'Tọa độ (Vĩ độ, Kinh độ) lấy từ Google Maps: nhấp phải vào vị trí → sao chép tọa độ, dán vào ô Vĩ độ, hệ thống tự tách.',
-      links: 'Đánh dấu "Ưu tiên" cho trường ưu tiên xếp của GV (bước 1 của thuật toán) hoặc "Không xếp" nếu trường không muốn GV này. Khoảng cách nhập tay sẽ thay cho số ước tính.',
+      teachers: 'Loại GV quyết định định mức giờ (Thường 15h, Kiêm nhiệm 10h). Vị trí nhà: dán link Google Maps (Chia sẻ → Sao chép đường liên kết), hệ thống tự lấy tọa độ và tính khoảng cách xe máy.',
+      schools: 'Vị trí trường: dán link Google Maps vào cột "Link Google Maps". Link rút gọn (maps.app.goo.gl) sẽ được tra cứu khi bấm "Cập nhật Google Maps".',
+      classes: 'Mỗi lớp học chương trình gì – TKB tự lấy chương trình theo lớp, và hệ thống chỉ xếp GV đã được đào tạo đúng chương trình đó.',
+      training: 'Mỗi dòng: 1 GV đã được đào tạo 1 chương trình. Chỉ trạng thái "Đạt" mới được xếp dạy.',
+      assistants: 'Trợ giảng được xếp ưu tiên theo khoảng cách nhà → trường (Google Maps, xe máy), trong khung giờ rảnh đã đăng ký.',
+      assistantFree: 'Mỗi dòng: 1 khung giờ rảnh trong tuần của trợ giảng. Trợ giảng chưa đăng ký dòng nào = coi như rảnh cả tuần.',
+      links: 'Đánh dấu "Ưu tiên" cho trường ưu tiên xếp của GV/TG hoặc "Không xếp" nếu trường không muốn người này. Khoảng cách nhập tay (nếu có) sẽ được dùng thay số liệu Google Maps.',
       unavailability: 'Lịch bận (đặc biệt với GV kiêm nhiệm) – hệ thống sẽ không xếp tiết vào các khung giờ này.',
-      subjects: 'Mã môn dùng trong TKB và trong cột "Môn đã đào tạo" của GV (nhiều môn cách nhau dấu phẩy).',
+      subjects: 'Chương trình STEM (vd. School - Grade 01). Mã dùng trong LopHoc, GV_DaoTao và TKB.',
+      distances: 'Khoảng cách xe máy (Google Maps, tránh cao tốc) từ nhà GV/TG đến trường. Bấm "Cập nhật Google Maps" để tính các cặp còn thiếu hoặc vị trí vừa thay đổi.',
     };
     main.innerHTML = '<div class="page-head"><div><h1>Danh mục dữ liệu</h1><div class="muted">Dữ liệu lưu trên Google Sheets – có thể sửa tại đây hoặc trực tiếp trên sheet.</div></div></div>' +
       '<div class="tabs">' + tabs.map(function (t) { return '<button data-tab="' + t[0] + '"' + (t[0] === table ? ' class="active"' : '') + '>' + esc(t[1]) + '</button>'; }).join('') + '</div>' +
       '<div class="alert info">' + esc(hints[table] || '') + '</div>' +
       '<div class="card"><div class="filters"><input type="search" id="dt-q" placeholder="Tìm…">' + (d.canEdit ? '<button class="btn primary" id="dt-add">+ Thêm</button>' : '') +
+      (can('edit_teachers') && ['schools', 'teachers', 'assistants', 'distances'].indexOf(table) >= 0 ? '<button class="btn" id="dt-maps">🗺 Cập nhật Google Maps</button>' : '') +
       '<button class="btn" id="dt-csv">⬇ CSV</button><span class="muted" id="dt-count"></span></div><div id="dt-table"></div></div>';
     $$('.tabs [data-tab]').forEach(function (b) { b.onclick = function () { navigate('data', b.getAttribute('data-tab')); }; });
     var cols = d.columns;
-    var show = cols.filter(function (c) { return ['notes', 'description', 'address'].indexOf(c.key) < 0 || table === 'subjects'; });
+    var show = cols.filter(function (c) { return ['notes', 'description', 'address', 'coords'].indexOf(c.key) < 0 || table === 'subjects'; });
     function cell(c, v) {
       if (c.type === 'bool') return v ? '✔' : '<span class="muted">–</span>';
       if (c.type === 'color') return v ? '<span class="chip"><span class="dot" style="background:' + esc(v) + '"></span>' + esc(v) + '</span>' : '';
+      if (c.type === 'map') return v ? '<a href="' + esc(/^https?:/.test(v) ? v : 'https://www.google.com/maps/search/' + encodeURIComponent(v)) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">📍 Mở</a>' : '<span class="badge warn">Chưa có</span>';
       if (c.key === 'preference') return v === 'Ưu tiên' ? '<span class="badge primary">★ Ưu tiên</span>' : v === 'Không xếp' ? '<span class="badge err">⛔ Không xếp</span>' : '';
       return esc(v);
     }
@@ -616,6 +653,7 @@ function viewData(main, param, isCurrent) {
     }
     $('#dt-q').oninput = debounce(draw, 150);
     var add = $('#dt-add'); if (add) add.onclick = function () { recordForm(d, null); };
+    var mapsBtn = $('#dt-maps'); if (mapsBtn) mapsBtn.onclick = function () { runMapsUpdate(); };
     $('#dt-csv').onclick = function () { downloadCsv(table + '.csv', cols.map(function (c) { return c.header; }), d.rows.map(function (r) { return cols.map(function (c) { return r[c.key]; }); })); };
     draw();
   });
@@ -636,6 +674,10 @@ function recordForm(d, rec) {
       case 'bool': return '<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" id="' + id + '"' + (v === true || v === 'TRUE' ? ' checked' : '') + '> ' + esc(c.header) + '</label></div>';
       case 'select': input = '<select id="' + id + '"' + (locked ? ' disabled' : '') + '>' + optionList(c.options.map(function (o) { return [o, o]; }), v, '—') + '</select>'; break;
       case 'teacher': input = '<select id="' + id + '"' + (locked ? ' disabled' : '') + '>' + teacherOptions(v, '— Chọn GV —') + '</select>'; break;
+      case 'assistant': input = '<select id="' + id + '"' + (locked ? ' disabled' : '') + '>' + teacherOptions(v, '— Chọn trợ giảng —', 'assistant') + '</select>'; break;
+      case 'person': input = '<select id="' + id + '"' + (locked ? ' disabled' : '') + '>' + teacherOptions(v, '— Chọn GV / TG —', 'person') + '</select>'; break;
+      case 'map': input = '<input type="text" id="' + id + '" value="' + esc(v) + '" placeholder="https://maps.app.goo.gl/…">'; break;
+      case 'district': input = '<input type="text" id="' + id + '" value="' + esc(v) + '" list="dl-district"><datalist id="dl-district">' + (App.boot.lookups.districts || []).map(function (x) { return '<option value="' + esc(x) + '">'; }).join('') + '</datalist>'; break;
       case 'school': input = '<select id="' + id + '"' + (locked ? ' disabled' : '') + '>' + schoolOptions(v, '— Chọn trường —') + '</select>'; break;
       case 'subject': input = '<select id="' + id + '">' + subjectOptions(v, '— Chọn môn —') + '</select>'; break;
       case 'weekday': input = '<select id="' + id + '">' + weekdayOptions(v) + '</select>'; break;
@@ -649,8 +691,9 @@ function recordForm(d, rec) {
         }).join('') + '</div></div>';
       default: input = '<input type="text" id="' + id + '" value="' + esc(v) + '"' + (locked ? ' disabled' : '') + '>';
     }
-    var hint = c.key === 'lat' ? '<div class="hint">Dán "10.7769, 106.7009" từ Google Maps để tự tách Vĩ độ/Kinh độ.</div>' : '';
-    return '<div class="field' + (c.key === 'notes' || c.key === 'address' || c.key === 'description' ? ' full' : '') + '">' + label + input + hint + '</div>';
+    var hint = c.key === 'lat' ? '<div class="hint">Để trống nếu đã dán link Google Maps – hệ thống tự lấy tọa độ.</div>'
+      : c.type === 'map' ? '<div class="hint">Google Maps → chọn địa điểm → Chia sẻ → Sao chép đường liên kết → dán vào đây (hoặc nhập địa chỉ).</div>' : '';
+    return '<div class="field' + (c.key === 'notes' || c.key === 'address' || c.key === 'description' || c.type === 'map' ? ' full' : '') + '">' + label + input + hint + '</div>';
   }).join('') + '</div>';
   var foot = (isNew ? '' : '<button class="btn danger" id="rf-del" style="margin-right:auto">Xóa</button>') + '<button class="btn" data-close>Hủy</button><button class="btn primary" id="rf-save">Lưu</button>';
   var m = modal({ title: (isNew ? 'Thêm ' : 'Sửa ') + d.label.toLowerCase(), body: html, footer: foot, wide: d.columns.length > 8 });
@@ -767,6 +810,7 @@ function viewSettings(main, param, isCurrent) {
           if (s.type === 'bool') return '<div class="field full"><label class="check"><input type="checkbox" id="' + id + '"' + (s.value ? ' checked' : '') + '> ' + esc(s.label) + '</label></div>';
           if (s.type === 'select') input = '<select id="' + id + '">' + optionList(s.options, s.value) + '</select>';
           else if (s.type === 'time') input = '<input type="time" id="' + id + '" value="' + esc(s.value) + '">';
+          else if (s.type === 'text') input = '<input type="text" id="' + id + '" value="' + esc(s.value) + '" autocomplete="off">';
           else input = '<input type="number" step="any" id="' + id + '" value="' + esc(s.value) + '">';
           return '<div class="field"><label for="' + id + '">' + esc(s.label) + '</label>' + input + '<div class="hint">Mặc định: ' + esc(s.def) + '</div></div>';
         }).join('') + '</div></div>';
@@ -890,14 +934,39 @@ function viewImport(main, param, isCurrent) {
     spec.forEach(function (t) { specBy[t.table] = t; });
     var sheets = [];
     main.innerHTML = '<div class="page-head"><div><h1>Nhập dữ liệu từ Excel</h1><div class="muted">Điền dữ liệu vào file mẫu rồi tải lên một lần – hệ thống kiểm tra từng dòng trước khi ghi vào Google Sheets.</div></div></div>' +
-      '<div class="grid cols-2"><div class="card"><h2>Bước 1 · Tải file mẫu</h2><p>File mẫu gồm các sheet bạn được phép nhập: <b>' + spec.map(function (t) { return esc(t.label); }).join(', ') + '</b>, kèm sheet <b>HuongDan</b> giải thích từng cột và dòng ví dụ.</p>' +
-      '<button class="btn primary" id="im-tpl">⬇ Tải file mẫu Excel</button></div>' +
-      '<div class="card"><h2>Bước 2 · Chọn file đã điền</h2><p class="muted">Hỗ trợ .xlsx, .xls, .csv. Tên sheet và dòng tiêu đề phải giữ như file mẫu.</p>' +
-      '<input type="file" id="im-file" accept=".xlsx,.xls,.csv"></div></div>' +
+      '<div class="grid cols-2"><div class="card"><h2>Bước 1 · Tạo file nhập liệu</h2><p>Gồm các sheet: <b>' + spec.map(function (t) { return esc(t.label); }).join(', ') + '</b>, kèm sheet <b>HuongDan</b>.</p>' +
+      '<p>✅ <b>Khuyến nghị:</b> tạo file Google Sheets – các cột Thứ, Loại GV, mã trường, mã GV/TG, chương trình… đều có <b>danh sách thả xuống</b> lấy từ dữ liệu hiện có, tránh nhập sai. Có thể điền online hoặc tải về dạng Excel.</p>' +
+      '<button class="btn primary" id="im-gs">📄 Tạo file nhập liệu (Google Sheets)</button> <button class="btn" id="im-tpl">⬇ File mẫu Excel đơn giản</button></div>' +
+      '<div class="card"><h2>Bước 2 · Đưa dữ liệu lên</h2><div class="field"><label>Dán link file Google Sheets đã điền</label><div class="filters" style="margin:0"><input type="text" id="im-url" placeholder="https://docs.google.com/spreadsheets/d/…" style="flex:1;min-width:220px"><button class="btn" id="im-read">Đọc file</button></div></div>' +
+      '<div class="field" style="margin-top:10px"><label>…hoặc chọn file Excel (.xlsx, .xls, .csv)</label><input type="file" id="im-file" accept=".xlsx,.xls,.csv"></div></div></div>' +
       '<div class="card" id="im-step3" style="display:none"><h2>Bước 3 · Kiểm tra & nhập</h2><div id="im-sheets"></div>' +
       '<div class="filters" style="margin-top:12px"><label class="check"><input type="checkbox" id="im-skip"> Bỏ qua dòng lỗi, vẫn nhập các dòng đúng</label>' +
       '<button class="btn" id="im-check">🔍 Kiểm tra (chưa ghi)</button><button class="btn primary" id="im-go">📥 Nhập dữ liệu</button></div><div id="im-result"></div></div>';
     $('#im-tpl').onclick = function () { busy(this, downloadTemplate(spec)).catch(showError); };
+    $('#im-gs').onclick = function () {
+      busy(this, call('import.template')).then(function (r) {
+        modal({ title: 'Đã tạo file nhập liệu', body: '<p>File <b>' + esc(r.name) + '</b> đã được tạo và chia sẻ cho bạn, kèm dữ liệu hiện có và danh sách thả xuống.</p>' +
+          '<p><a class="btn primary" href="' + esc(r.url) + '" target="_blank" rel="noopener">Mở file Google Sheets</a> <a class="btn" href="' + esc(r.xlsxUrl) + '" target="_blank" rel="noopener">⬇ Tải về dạng Excel</a></p>' +
+          '<p class="muted">Điền xong, dán link file vào ô "Dán link file Google Sheets đã điền" rồi bấm Đọc file.</p>' });
+        $('#im-url').value = r.url;
+      }).catch(showError);
+    };
+    $('#im-read').onclick = function () {
+      var url = $('#im-url').value.trim();
+      if (!url) { toast('Hãy dán link Google Sheets', 'warn'); return; }
+      busy(this, call('import.readSheet', { url: url })).then(function (r) {
+        var bySheet = {};
+        spec.forEach(function (t) { bySheet[keyName(t.sheet)] = t; bySheet[keyName(t.label)] = t; });
+        sheets = r.sheets.filter(function (sh) { return keyName(sh.name) !== 'huongdan'; }).map(function (sh) {
+          var t = bySheet[keyName(sh.name)];
+          return { name: sh.name, aoa: sh.aoa, table: t ? t.table : '' };
+        });
+        $('#im-result').innerHTML = '';
+        $('#im-step3').style.display = '';
+        drawSheets();
+        toast('Đã đọc file "' + r.name + '"', 'ok');
+      }).catch(showError);
+    };
 
     function drawSheets() {
       $('#im-sheets').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th>Sheet trong file</th><th>Nhập vào bảng</th><th class="num">Số dòng</th><th>Cách nhập</th><th>Ghi chú</th></tr></thead><tbody>' +
@@ -979,6 +1048,71 @@ function viewImport(main, param, isCurrent) {
     $('#im-check').onclick = function () { run(true, this); };
     $('#im-go').onclick = function () { run(false, this); };
   });
+}
+
+/* ===================== Ma trận đào tạo & Google Maps ===================== */
+function viewTrainingMatrix(main, tabs, isCurrent) {
+  return Promise.all([call('data.list', { table: 'training' }), call('data.list', { table: 'teachers' }), call('data.list', { table: 'classes' })]).then(function (res) {
+    if (!isCurrent()) return;
+    var training = res[0].rows;
+    var teachers = res[1].rows.filter(function (t) { return t.active !== false; });
+    var subjects = App.boot.lookups.subjects;
+    var demand = {};
+    res[2].rows.forEach(function (c) { demand[c.subject] = (demand[c.subject] || 0) + 1; });
+    var has = {};
+    training.forEach(function (t) { has[t.teacher + '|' + t.subject] = t.status || 'Đạt'; });
+    main.innerHTML = '<div class="page-head"><div><h1>Danh mục dữ liệu</h1></div></div>' +
+      '<div class="tabs">' + tabs.map(function (t) { return '<button data-tab="' + t[0] + '"' + (t[0] === 'matrix' ? ' class="active"' : '') + '>' + esc(t[1]) + '</button>'; }).join('') + '</div>' +
+      '<div class="alert info">✔ = đã được đào tạo (Đạt) · "đang" = đang đào tạo (chưa được xếp dạy). Dòng cuối: số GV đạt / số lớp đang học chương trình – chương trình có ít GV so với số lớp cần ưu tiên đào tạo thêm.</div>' +
+      '<div class="card"><div class="filters"><input type="search" id="mx-q" placeholder="Tìm GV…"></div><div id="mx"></div></div>';
+    $$('.tabs [data-tab]').forEach(function (b) { b.onclick = function () { navigate('data', b.getAttribute('data-tab')); }; });
+    function draw() {
+      var q = $('#mx-q').value;
+      var list = teachers.filter(function (t) { return matches(q, [t.code, t.name]); });
+      var count = {};
+      teachers.forEach(function (t) { subjects.forEach(function (s) { if (has[t.code + '|' + s.code] === 'Đạt') count[s.code] = (count[s.code] || 0) + 1; }); });
+      $('#mx').innerHTML = '<div class="table-wrap" style="max-height:70vh;overflow:auto"><table class="tbl"><thead><tr><th>Giáo viên</th>' +
+        subjects.map(function (s) { return '<th class="num" title="' + esc(s.name) + '">' + esc(s.code) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        list.map(function (t) {
+          return '<tr><td class="nowrap"><b>' + esc(t.name) + '</b> <small>' + esc(t.code) + '</small></td>' + subjects.map(function (s) {
+            var v = has[t.code + '|' + s.code];
+            return '<td class="num">' + (v === 'Đạt' ? '<span style="color:var(--ok)">✔</span>' : v ? '<small class="muted">đang</small>' : '') + '</td>';
+          }).join('') + '</tr>';
+        }).join('') +
+        '<tr><td><b>GV đạt / số lớp</b></td>' + subjects.map(function (s) {
+          var n = count[s.code] || 0, dm = demand[s.code] || 0;
+          return '<td class="num"><span class="badge ' + (dm && n * 10 < dm ? 'err' : '') + '">' + n + '/' + dm + '</span></td>';
+        }).join('') + '</tr></tbody></table></div>';
+    }
+    $('#mx-q').oninput = debounce(draw, 150);
+    draw();
+  });
+}
+
+/** Cập nhật tọa độ + khoảng cách Google Maps; tự gọi lại tới khi xong. */
+function runMapsUpdate() {
+  var stop = false;
+  var total = { coords: 0, computed: 0, failedLinks: [] };
+  var m = modal({ title: 'Cập nhật Google Maps (khoảng cách xe máy)', body: '<div id="mp-body">' + spinner('Đang lấy tọa độ từ link và tính khoảng cách… (mỗi lượt tối đa ~4 phút)') + '</div>',
+    footer: '<button class="btn" id="mp-stop">Dừng</button>', onClose: function () { stop = true; } });
+  $('#mp-stop', m.el).onclick = function () { stop = true; m.close(); };
+  function step() {
+    call('maps.update').then(function (r) {
+      total.coords += r.coordsUpdated;
+      total.computed += r.computed;
+      total.failedLinks = total.failedLinks.concat(r.coordsFailed || []);
+      var done = !r.remaining || r.quotaExceeded;
+      var html = '<p>Nguồn: <b>' + esc(r.source) + '</b></p><p>Tọa độ đã lấy từ link: <b>' + total.coords + '</b> · Khoảng cách đã tính: <b>' + total.computed + '</b> cặp' +
+        (r.remaining ? ' · Còn lại: <b>' + r.remaining + '</b>' : '') + '</p>' +
+        (total.failedLinks.length ? '<div class="alert warn">Không đọc được vị trí từ link của: ' + total.failedLinks.map(esc).join(', ') + '. Hãy kiểm tra lại link (Google Maps → Chia sẻ → Sao chép đường liên kết).</div>' : '') +
+        (r.quotaExceeded ? '<div class="alert warn">Đã hết hạn mức Google Maps hôm nay – phần còn lại sẽ tính vào ngày mai (bấm lại nút này).</div>' : '') +
+        (done ? '<div class="alert ok">Hoàn tất.</div>' : spinner('Đang tính tiếp…'));
+      $('#mp-body', m.el).innerHTML = html;
+      if (!done && !stop) step();
+      else { invalidate(); $('#mp-stop', m.el).textContent = 'Đóng'; }
+    }).catch(function (e) { $('#mp-body', m.el).innerHTML = '<div class="alert err">' + esc(e.message) + '</div>'; });
+  }
+  step();
 }
 
 /* =============================== Đăng ký route =============================== */

@@ -78,13 +78,13 @@ test('(2) khoảng cách gần hơn được ưu tiên; (3) môn đã đào tạ
     teachers: [T('A', { subjects: 'RB' }), T('B', { subjects: 'SCR' })],
     links: [D('A', 'S1', 9), D('B', 'S1', 1)],
     lessons: [L('L1', 'S1', 'Thứ 2', '08:00', '08:45')],
-  }));
+  }), { require_trained_subject: false });
   assert.equal(far.byLesson.L1, 'B', 'GV chưa đào tạo nhưng gần hơn 8km vẫn thắng (khoảng cách xếp trước môn học)');
   const near = run(scenario({
     teachers: [T('A', { subjects: 'RB' }), T('B', { subjects: 'SCR' })],
     links: [D('A', 'S1', 4), D('B', 'S1', 1)],
     lessons: [L('L1', 'S1', 'Thứ 2', '08:00', '08:45')],
-  }));
+  }), { require_trained_subject: false });
   assert.equal(near.byLesson.L1, 'A', 'chênh 3km thì GV đã được đào tạo thắng');
 });
 
@@ -95,7 +95,7 @@ test('bắt buộc đào tạo môn khi bật cấu hình', () => {
     lessons: [L('L1', 'S1', 'Thứ 2', '08:00', '08:45')],
   }), { require_trained_subject: true });
   assert.equal(byLesson.L1, undefined);
-  assert.match(res.unassigned[0].reason, /chưa được đào tạo môn/);
+  assert.match(res.unassigned[0].reason, /Chưa có GV nào được đào tạo/);
 });
 
 test('ưu tiên trường chỉ áp dụng cho môn GV đã được đào tạo (mặc định) và có thể tắt', () => {
@@ -105,7 +105,7 @@ test('ưu tiên trường chỉ áp dụng cho môn GV đã được đào tạo
     lessons: [L('L1', 'S1', 'Thứ 2', '08:00', '08:45')],
   });
   assert.equal(run(data).byLesson.L1, 'B');
-  assert.equal(run(data, { priority_requires_trained: false }).byLesson.L1, 'A');
+  assert.equal(run(data, { require_trained_subject: false, priority_requires_trained: false }).byLesson.L1, 'A');
 });
 
 test('không trùng giờ và có lý do khi không xếp được', () => {
@@ -302,23 +302,97 @@ test('xếp hạng GV cho 1 tiết (gán tay / tìm GV dạy thay)', () => {
   assert.equal(ranked[ranked.length - 1].teacher, 'C');
 });
 
-test('dữ liệu mẫu ~70 trường: xếp đủ, không vi phạm ràng buộc cứng', () => {
+test('dữ liệu mẫu Hà Nội: xếp đủ GV & trợ giảng, không vi phạm ràng buộc cứng', () => {
   const demo = G.buildDemoData(20260901);
-  assert.equal(demo.schools.length, 72);
-  assert.equal(demo.teachers.length, 110);
+  assert.equal(demo.schools.length, 45);
+  assert.equal(demo.teachers.length, 80);
+  assert.equal(demo.assistants.length, 75);
   const c = G.buildContext(demo, {});
+  assert.ok(c.lessonList.every((l) => !l.invalid), 'chương trình lấy được từ sheet LopHoc');
   const t0 = Date.now();
-  const res = G.runAutoSchedule(c, { mode: 'fill' });
-  const ms = Date.now() - t0;
-  assert.ok(ms < 10000, 'chạy quá lâu: ' + ms + 'ms');
-  assert.ok(res.stats.assigned / res.stats.considered > 0.97, JSON.stringify(res.stats));
-  res.proposals.forEach((p) => { c.lessons[p.lessonId].teacher = p.teacher; });
-  const hard = G.detectConflicts(c).filter((x) => ['overlap', 'travel', 'unavailable', 'blocked', 'inactive', 'over_hours', 'too_many_schools', 'too_far'].includes(x.type));
-  assert.deepEqual(plain(hard), []);
-  res.loads.forEach((l) => {
-    assert.ok(l.load <= l.max + 1e-9, l.teacher + ' vượt giờ');
-    assert.ok(l.schools.length <= 3, l.teacher + ' quá 3 trường');
+  for (const role of ['teacher', 'assistant']) {
+    const res = G.runAutoSchedule(c, { role, mode: 'fill' });
+    assert.ok(res.stats.assigned / res.stats.considered > 0.97, role + ' ' + JSON.stringify(res.stats));
+    res.proposals.forEach((p) => { c.lessons[p.lessonId][role] = p.teacher; });
+    res.loads.forEach((l) => {
+      assert.ok(l.load <= l.max + 1e-9, l.teacher + ' vượt giờ');
+      assert.ok(l.schools.length <= 3, l.teacher + ' quá 3 trường');
+    });
+    assert.ok(res.proposals.every((p) => /^Điểm /.test(p.explain)));
+  }
+  assert.ok(Date.now() - t0 < 10000);
+  // Không có lỗi nào: không trùng giờ, không GV chưa đào tạo, TG trong giờ rảnh…
+  assert.deepEqual(plain(G.detectConflicts(c)), []);
+  // Tiết không cần trợ giảng thì không xếp trợ giảng.
+  assert.ok(c.lessonList.filter((l) => !l.needAssistant).every((l) => !l.assistant));
+});
+
+test('chương trình lấy theo lớp (LopHoc) và GV phải được đào tạo đúng chương trình', () => {
+  const data = scenario({
+    subjects: [{ code: 'G01', name: 'School - Grade 01' }, { code: 'G06', name: 'School - Grade 06' }],
+    classes: [{ school: 'S1', className: '1A1', subject: 'G01' }, { school: 'S1', className: '6A1', subject: 'G06' }],
+    teachers: [T('NEAR', { subjects: '' }), T('FAR', { subjects: '' })],
+    training: [{ teacher: 'NEAR', subject: 'G06', status: 'Đạt' }, { teacher: 'FAR', subject: 'G01', status: 'Đạt' }, { teacher: 'NEAR', subject: 'G01', status: 'Đang đào tạo' }],
+    links: [D('NEAR', 'S1', 1), D('FAR', 'S1', 20)],
+    lessons: [L('L1', 'S1', 'Thứ 2', '08:00', '08:45', { subject: '', className: '1A1' }), L('L2', 'S1', 'Thứ 2', '09:00', '09:45', { subject: '', className: '6A1' }),
+      L('L3', 'S1', 'Thứ 3', '09:00', '09:45', { subject: '', className: '9Z9' })],
   });
-  // Mọi giải thích đều có điểm số.
-  assert.ok(res.proposals.every((p) => /^Điểm /.test(p.explain)));
+  const { c, byLesson } = run(data);
+  assert.equal(c.lessons.L1.subject, 'G01');
+  assert.equal(byLesson.L1, 'FAR', 'GV gần nhưng "Đang đào tạo" G01 thì chưa được xếp');
+  assert.equal(byLesson.L2, 'NEAR');
+  assert.match(c.lessons.L3.invalid, /Chưa xác định chương trình/);
+});
+
+test('trợ giảng: chỉ xếp trong giờ rảnh, ưu tiên người ở gần trường', () => {
+  const data = scenario({
+    schools: [{ code: 'S1', name: 'S1', lat: 21.03, lng: 105.80 }],
+    teachers: [T('GV1', { lat: 21.03, lng: 105.80 })],
+    assistants: [
+      { code: 'TG1', name: 'Gần nhưng bận', lat: 21.031, lng: 105.801 },
+      { code: 'TG2', name: 'Gần vừa', lat: 21.04, lng: 105.81 },
+      { code: 'TG3', name: 'Xa', lat: 21.10, lng: 105.90 },
+    ],
+    assistantFree: [
+      { assistant: 'TG1', weekday: 'Thứ 2', start: '13:00', end: '17:00' },
+      { assistant: 'TG2', weekday: 'Thứ 2', start: '07:00', end: '11:30' },
+      { assistant: 'TG3', weekday: 'Thứ 2', start: '07:00', end: '17:00' },
+    ],
+    lessons: [
+      L('L1', 'S1', 'Thứ 2', '08:00', '08:45'),
+      L('L2', 'S1', 'Thứ 2', '14:00', '14:45'),
+      L('L3', 'S1', 'Thứ 2', '15:00', '15:45', { needAssistant: 'Không' }),
+    ],
+  });
+  const c = G.buildContext(data, {});
+  const res = G.runAutoSchedule(c, { role: 'assistant', mode: 'fill' });
+  const by = Object.fromEntries(res.proposals.map((p) => [p.lessonId, p.teacher]));
+  assert.equal(by.L1, 'TG2', 'TG1 gần hơn nhưng không rảnh buổi sáng');
+  assert.equal(by.L2, 'TG1');
+  assert.equal(by.L3, undefined, 'tiết không cần trợ giảng');
+  c.lessons.L1.assistant = 'TG1';
+  assert.ok(G.detectConflicts(c).some((x) => x.type === 'not_free' && x.role === 'assistant'));
+  const free = G.computeFreeSlots(c, 0, { role: 'assistant' }).rows.find((r) => r.teacher === 'TG2');
+  assert.ok(free.free.every((f) => f.end <= 11 * 60 + 30), JSON.stringify(free.free));
+});
+
+test('link Google Maps → tọa độ; khoảng cách Google Maps được ưu tiên hơn ước tính', () => {
+  const data = scenario({
+    schools: [{ code: 'S1', name: 'S1', mapUrl: 'https://www.google.com/maps/place/Truong/@21.0,105.8,17z/data=!3d21.0301!4d105.8012' }],
+    teachers: [T('A', { mapUrl: 'https://maps.google.com/?q=21.0501,105.8012' })],
+    lessons: [L('L1', 'S1', 'Thứ 2', '08:00', '08:45')],
+  });
+  let c = G.buildContext(data, {});
+  assert.equal(c.schools.S1.lat, 21.0301);
+  assert.equal(G.teacherSchoolDistance(c, 'A', 'S1').source, 'estimate');
+  const key = G.coordsKey_(c.people.A, c.schools.S1);
+  data.distances = [{ person: 'A', school: 'S1', km: 3.4, minutes: 12, coords: key }];
+  c = G.buildContext(data, {});
+  const d = G.teacherSchoolDistance(c, 'A', 'S1');
+  assert.equal(d.source, 'maps');
+  assert.equal(d.km, 3.4);
+  // Đổi vị trí nhà → số liệu cũ không còn đúng, quay về ước tính cho tới khi tính lại.
+  data.teachers[0].mapUrl = 'https://maps.google.com/?q=21.0601,105.8012';
+  c = G.buildContext(data, {});
+  assert.equal(G.teacherSchoolDistance(c, 'A', 'S1').source, 'estimate');
 });

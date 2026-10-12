@@ -189,7 +189,7 @@ function routeAllowed(r) {
 /* ------------------------------- Khung giao diện ------------------------------- */
 var NAV = [
   { group: 'Xem lịch', items: [
-    ['dashboard', '📊', 'Tổng quan'], ['teachers', '👩‍🏫', 'Lịch theo giáo viên'], ['schools', '🏫', 'Lịch theo trường'],
+    ['dashboard', '📊', 'Tổng quan'], ['teachers', '👩‍🏫', 'Lịch GV & trợ giảng'], ['schools', '🏫', 'Lịch theo trường'],
     ['free', '🕒', 'Lịch trống GV'], ['conflicts', '⚠️', 'Cảnh báo trùng lịch'], ['me', '🙋', 'Lịch dạy của tôi'],
   ] },
   { group: 'Điều phối', items: [['lessons', '📅', 'Thời khóa biểu STEM'], ['auto', '🤖', 'Xếp lịch tự động'], ['data', '🗂️', 'Danh mục dữ liệu'], ['import', '📥', 'Nhập dữ liệu từ Excel']] },
@@ -381,13 +381,15 @@ function weekGrid(lessons, opts) {
         return;
       }
       var l = ev.l;
-      var cls = 'ev' + (l.teacher ? '' : (opts.mode === 'school' ? ' unassigned' : '')) + (l.conflict ? ' ' + l.conflict : '');
-      var primary = opts.mode === 'school' ? (l.teacher ? l.teacherName : 'Chưa xếp GV') : l.schoolName;
-      var title = l.weekdayLabel + ' ' + l.startText + '–' + l.endText + '\n' + l.schoolName + (l.className ? ' · Lớp ' + l.className : '') + '\n' + l.subjectName + '\nGV: ' + (l.teacherName || 'chưa xếp');
+      var cls = 'ev' + (l.teacher || !l.needTeacher ? '' : (opts.mode === 'school' ? ' unassigned' : '')) + (l.conflict ? ' ' + l.conflict : '');
+      var primary = opts.mode === 'school' ? (l.teacher ? l.teacherName : !l.needTeacher ? 'GV của trường' : 'Chưa xếp GV') : l.schoolName;
+      var taLine = l.needAssistant ? 'TG: ' + (l.assistant ? l.assistantName : 'chưa xếp') : 'Không cần TG';
+      var title = l.weekdayLabel + ' ' + l.startText + '–' + l.endText + '\n' + l.schoolName + (l.className ? ' · Lớp ' + l.className : '') + '\n' + l.subjectName + '\nGV: ' + (l.teacherName || 'chưa xếp') + '\n' + taLine;
       html += '<div class="' + cls + '" data-lesson="' + esc(l.id) + '" style="' + style + 'border-left-color:' + esc(l.color || subjectColor(l.subject)) + '" title="' + esc(title) + '">' +
         (l.locked ? '<span class="lock">📌</span>' : '') +
         '<b>' + esc(l.startText) + '–' + esc(l.endText) + '</b>' + esc(primary) +
-        '<div class="t2">' + esc((l.className ? l.className + ' · ' : '') + l.subjectName) + '</div></div>';
+        '<div class="t2">' + esc((l.className ? l.className + ' · ' : '') + l.subjectName) + '</div>' +
+        (opts.mode === 'school' && l.needAssistant ? '<div class="t2">' + (l.assistant ? 'TG: ' + esc(l.assistantName) : '<i>Thiếu TG</i>') + '</div>' : '') + '</div>';
     });
     html += '</div>';
   });
@@ -398,11 +400,12 @@ function weekGrid(lessons, opts) {
 /** Bảng danh sách tiết (dạng in / điện thoại). */
 function lessonTable(lessons, mode) {
   if (!lessons.length) return '<div class="empty">Chưa có tiết dạy nào.</div>';
-  return '<div class="table-wrap"><table class="tbl"><thead><tr><th>Thứ</th><th>Giờ</th>' + (mode === 'school' ? '<th>Giáo viên</th>' : '<th>Trường</th>') +
-    '<th>Lớp</th><th>Môn</th><th>Phòng</th><th></th></tr></thead><tbody>' +
+  return '<div class="table-wrap"><table class="tbl"><thead><tr><th>Thứ</th><th>Giờ</th>' + (mode === 'school' ? '<th>Giáo viên</th><th>Trợ giảng</th>' : '<th>Trường</th>') +
+    '<th>Lớp</th><th>Chương trình</th><th>Phòng</th><th></th></tr></thead><tbody>' +
     lessons.map(function (l) {
       return '<tr class="clickable" data-lesson="' + esc(l.id) + '"><td class="nowrap">' + esc(l.weekdayLabel) + '</td><td class="nowrap">' + esc(l.startText) + '–' + esc(l.endText) + '</td>' +
-        '<td>' + (mode === 'school' ? (l.teacher ? esc(l.teacherName) : '<span class="badge warn">Chưa xếp GV</span>') : esc(l.schoolName)) + '</td>' +
+        '<td>' + (mode === 'school' ? (l.teacher ? esc(l.teacherName) : '<span class="badge warn">Chưa xếp GV</span>') + '</td><td>' +
+          (!l.needAssistant ? '<span class="muted">Không cần</span>' : l.assistant ? esc(l.assistantName) : '<span class="badge warn">Chưa xếp TG</span>') : esc(l.schoolName)) + '</td>' +
         '<td>' + esc(l.className) + '</td><td><span class="chip"><span class="dot" style="background:' + esc(l.color || subjectColor(l.subject)) + '"></span>' + esc(l.subjectName) + '</span></td>' +
         '<td>' + esc(l.room) + '</td><td>' + lessonFlags(l) + '</td></tr>';
     }).join('') + '</tbody></table></div>';
@@ -413,7 +416,9 @@ function lessonFlags(l) {
   if (l.conflict === 'error') out += '<span class="badge err">Trùng lịch</span> ';
   else if (l.conflict === 'warning') out += '<span class="badge warn">Cảnh báo</span> ';
   if (l.locked) out += '<span class="badge primary">📌 Ghim</span> ';
-  if (!l.teacher && !l.invalid) out += '<span class="badge warn">Chưa xếp</span>';
+  if (!l.needTeacher) out += '<span class="badge">GV của trường</span> ';
+  else if (!l.teacher && !l.invalid) out += '<span class="badge warn">Chưa xếp GV</span> ';
+  if (l.needAssistant && !l.assistant && !l.invalid) out += '<span class="badge info">Thiếu TG</span>';
   return out;
 }
 function bindLessonClicks(root, lessons, onChange) {
@@ -430,26 +435,34 @@ function openLesson(l, onChange) {
     ['Trường', esc(l.schoolName) + ' <small>(' + esc(l.school) + ')</small>'],
     ['Thời gian', esc(l.weekdayLabel + ' · ' + l.startText + '–' + l.endText) + ' <small>(' + fmtH(l.load) + ')</small>'],
     ['Lớp / Khối', esc(l.className || '–') + ' / ' + esc(l.grade || '–')],
-    ['Môn', esc(l.subjectName) + ' · ' + esc(l.periods) + ' tiết' + (l.room ? ' · Phòng ' + esc(l.room) : '')],
-    ['Giáo viên', l.teacher ? '<a href="#" data-goto-teacher="' + esc(l.teacher) + '">' + esc(l.teacherName) + '</a> <small>(' + esc(l.teacher) + ')</small>' : '<span class="badge warn">Chưa xếp</span>'],
+    ['Chương trình', esc(l.subjectName) + (l.subjectFromClass ? ' <small class="muted">(theo lớp)</small>' : '') + ' · ' + esc(l.periods) + ' tiết' + (l.room ? ' · Phòng ' + esc(l.room) : '')],
+    ['Giáo viên', !l.needTeacher && !l.teacher ? '<span class="muted">Giáo viên của trường dạy (KDI chỉ cử trợ giảng)</span>' : l.teacher ? '<a href="#" data-goto-teacher="' + esc(l.teacher) + '">' + esc(l.teacherName) + '</a> <small>(' + esc(l.teacher) + ')</small>' : '<span class="badge warn">Chưa xếp</span>'],
+    ['Trợ giảng', !l.needAssistant ? '<span class="muted">Lớp không cần trợ giảng</span>' :
+      l.assistant ? '<a href="#" data-goto-teacher="' + esc(l.assistant) + '">' + esc(l.assistantName) + '</a> <small>(' + esc(l.assistant) + ')</small>' : '<span class="badge info">Chưa xếp</span>'],
     ['Trạng thái', lessonFlags(l) + (l.source ? ' <small>Nguồn: ' + esc(l.source) + '</small>' : '')],
   ];
-  if (l.explain) rows.push(['Giải thích', '<div class="explain">' + esc(l.explain) + '</div>']);
+  if (l.explain) rows.push(['Giải thích GV', '<div class="explain">' + esc(l.explain) + '</div>']);
+  if (l.explainTA) rows.push(['Giải thích TG', '<div class="explain">' + esc(l.explainTA) + '</div>']);
   if (l.notes) rows.push(['Ghi chú', esc(l.notes)]);
   if (l.invalid) rows.push(['Lỗi dữ liệu', '<span class="badge err">' + esc(l.invalid) + '</span>']);
   var body = '<table class="tbl" style="margin-bottom:12px">' + rows.map(function (r) { return '<tr><th style="width:120px">' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>';
-  if (can('assign') && !l.invalid) {
-    body += '<h3>Chọn / đổi giáo viên <small class="muted">– xếp hạng theo đúng thứ tự ưu tiên của hệ thống</small></h3>' +
-      '<div class="filters"><input type="search" id="cand-q" placeholder="Tìm GV…"><label class="check"><input type="checkbox" id="cand-ok" checked> Chỉ GV phù hợp</label></div><div id="cands">' + spinner('Đang tính toán…') + '</div>';
+  var canPick = can('assign') && !l.invalid;
+  if (canPick) {
+    var firstRole = l.needTeacher || !l.needAssistant ? 'teacher' : 'assistant';
+    body += '<div class="tabs" id="cand-tabs">' + (l.needTeacher ? '<button data-role="teacher" class="active">Chọn / đổi giáo viên</button>' : '') +
+      (l.needAssistant ? '<button data-role="assistant"' + (firstRole === 'assistant' ? ' class="active"' : '') + '>Chọn / đổi trợ giảng</button>' : '') + '</div>' +
+      '<div class="muted" style="margin-bottom:6px">Xếp hạng theo đúng thứ tự ưu tiên của hệ thống; GV chưa được đào tạo chương trình sẽ không phù hợp.</div>' +
+      '<div class="filters"><input type="search" id="cand-q" placeholder="Tìm…"><label class="check"><input type="checkbox" id="cand-ok" checked> Chỉ người phù hợp</label></div><div id="cands">' + spinner('Đang tính toán…') + '</div>';
   }
   var foot = '';
-  if (can('assign') && !l.invalid) {
+  if (canPick) {
     foot += '<button class="btn" data-act="lock">' + (l.locked ? 'Bỏ ghim' : '📌 Ghim (không cho tự động đổi)') + '</button>';
     if (l.teacher) foot += '<button class="btn" data-act="unassign">Bỏ gán GV</button>';
+    if (l.assistant) foot += '<button class="btn" data-act="unassignTA">Bỏ gán TG</button>';
   }
   if (can('edit_timetable')) foot += '<button class="btn" data-act="edit">Sửa tiết</button><button class="btn danger" data-act="delete">Xóa</button>';
   foot += '<button class="btn" data-close>Đóng</button>';
-  var m = modal({ title: 'Tiết ' + l.id, body: body, footer: foot, wide: can('assign') });
+  var m = modal({ title: 'Tiết ' + l.id, body: body, footer: foot, wide: canPick });
   function changed(msg, warnings) {
     invalidate();
     m.close();
@@ -464,7 +477,10 @@ function openLesson(l, onChange) {
     busy(this, call('lessons.lock', { ids: [l.id], locked: !l.locked })).then(function () { changed(l.locked ? 'Đã bỏ ghim' : 'Đã ghim tiết'); }).catch(showError);
   };
   if (act('unassign')) act('unassign').onclick = function () {
-    busy(this, call('lessons.assign', { id: l.id, teacher: '' })).then(function () { changed('Đã bỏ gán GV'); }).catch(showError);
+    busy(this, call('lessons.assign', { id: l.id, role: 'teacher', teacher: '' })).then(function () { changed('Đã bỏ gán GV'); }).catch(showError);
+  };
+  if (act('unassignTA')) act('unassignTA').onclick = function () {
+    busy(this, call('lessons.assign', { id: l.id, role: 'assistant', assistant: '' })).then(function () { changed('Đã bỏ gán trợ giảng'); }).catch(showError);
   };
   if (act('edit')) act('edit').onclick = function () { m.close(); lessonForm(l, null, onChange); };
   if (act('delete')) act('delete').onclick = function () {
@@ -473,42 +489,57 @@ function openLesson(l, onChange) {
       call('lessons.delete', { ids: [l.id] }).then(function () { changed('Đã xóa tiết'); }).catch(showError);
     });
   };
-  if (can('assign') && !l.invalid) {
-    call('lessons.candidates', { id: l.id }).then(function (res) {
-      var all = res.candidates;
-      function draw() {
-        var q = $('#cand-q', m.el).value;
-        var onlyOk = $('#cand-ok', m.el).checked;
-        var list = all.filter(function (c) { return (!onlyOk || c.feasible || c.current) && matches(q, [c.teacher, c.name]); }).slice(0, 60);
-        $('#cands', m.el).innerHTML = !list.length ? '<div class="empty">Không có GV phù hợp. Bỏ chọn "Chỉ GV phù hợp" để xem lý do.</div>' :
-          '<div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>Giáo viên</th><th class="num">Điểm</th><th class="num">Khoảng cách</th><th>Giờ dạy</th><th class="num">Số trường</th><th>Ghi chú</th><th></th></tr></thead><tbody>' +
-          list.map(function (c, i) {
-            var notes = (c.priority ? '<span class="badge primary">★ Ưu tiên</span> ' : '') + (c.trained ? '<span class="badge ok">Đã đào tạo</span> ' : '<span class="badge warn">Chưa đào tạo</span> ') +
-              (c.feasible ? '' : '<span class="badge err">' + esc(c.reason) + '</span>') + (c.current ? ' <span class="badge info">Đang dạy</span>' : '');
-            return '<tr><td>' + (i + 1) + '</td><td><b>' + esc(c.name) + '</b><br><small>' + esc(c.teacher + ' · ' + c.type + ' · Loại ' + c.rating) + '</small></td>' +
-              '<td class="num score" title="' + esc(c.explain) + '">' + fmtNum(c.score) + '</td>' +
-              '<td class="num">' + (c.distance === null || c.distance === undefined ? '?' : fmtNum(c.distance) + ' km') + (c.distanceSource === 'estimate' ? '<br><small>ước tính</small>' : '') + '</td>' +
-              '<td style="min-width:110px">' + loadBar(c.load, c.target, c.max) + '<small>' + fmtH(c.load) + ' / ' + fmtH(c.target) + '</small></td>' +
-              '<td class="num">' + c.schools + '</td><td>' + notes + '<div class="explain">' + esc(c.explain) + '</div></td>' +
-              '<td>' + (c.current ? '' : '<button class="btn sm ' + (c.feasible ? 'primary' : '') + '" data-pick="' + esc(c.teacher) + '">Chọn</button>') + '</td></tr>';
-          }).join('') + '</tbody></table></div>';
-        $$('[data-pick]', m.el).forEach(function (b) {
-          b.onclick = function () {
-            var code = b.getAttribute('data-pick');
-            var c = all.filter(function (x) { return x.teacher === code; })[0];
-            var go = c.feasible ? Promise.resolve(true) : confirmBox(c.name + ' không phù hợp: ' + c.reason + '.\nVẫn gán?', 'Vẫn gán', true);
-            go.then(function (ok) {
-              if (!ok) return;
-              busy(b, call('lessons.assign', { id: l.id, teacher: code })).then(function (r) { changed('Đã gán ' + c.name, r.warnings); }).catch(showError);
-            });
-          };
+  if (!canPick) return;
+  var role = firstRole;
+  var all = [];
+  function draw() {
+    var q = $('#cand-q', m.el).value;
+    var onlyOk = $('#cand-ok', m.el).checked;
+    var who = role === 'assistant' ? 'trợ giảng' : 'GV';
+    var list = all.filter(function (c) { return (!onlyOk || c.feasible || c.current) && matches(q, [c.teacher, c.name]); }).slice(0, 60);
+    $('#cands', m.el).innerHTML = !list.length ? '<div class="empty">Không có ' + who + ' phù hợp. Bỏ chọn "Chỉ người phù hợp" để xem lý do.</div>' :
+      '<div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>' + (role === 'assistant' ? 'Trợ giảng' : 'Giáo viên') + '</th><th class="num">Điểm</th><th class="num">Khoảng cách</th><th>Giờ</th><th class="num">Số trường</th><th>Ghi chú</th><th></th></tr></thead><tbody>' +
+      list.map(function (c, i) {
+        var notes = (c.priority ? '<span class="badge primary">★ Ưu tiên</span> ' : '') +
+          (role === 'teacher' ? (c.trained ? '<span class="badge ok">Đã đào tạo</span> ' : '<span class="badge err">Chưa đào tạo</span> ') : '') +
+          (c.feasible ? '' : '<span class="badge err">' + esc(c.reason) + '</span>') + (c.current ? ' <span class="badge info">Đang phụ trách</span>' : '');
+        return '<tr><td>' + (i + 1) + '</td><td><b>' + esc(c.name) + '</b><br><small>' + esc(c.teacher + ' · ' + c.type + (c.rating ? ' · Loại ' + c.rating : '')) + '</small></td>' +
+          '<td class="num score" title="' + esc(c.explain) + '">' + fmtNum(c.score) + '</td>' +
+          '<td class="num">' + (c.distance === null || c.distance === undefined ? '?' : fmtNum(c.distance) + ' km') +
+            (c.distanceSource === 'maps' ? '<br><small>Google Maps</small>' : c.distanceSource === 'estimate' ? '<br><small>ước tính</small>' : '') + '</td>' +
+          '<td style="min-width:110px">' + loadBar(c.load, c.target, c.max) + '<small>' + fmtH(c.load) + ' / ' + fmtH(c.target) + '</small></td>' +
+          '<td class="num">' + c.schools + '</td><td>' + notes + '<div class="explain">' + esc(c.explain) + '</div></td>' +
+          '<td>' + (c.current ? '' : '<button class="btn sm ' + (c.feasible ? 'primary' : '') + '" data-pick="' + esc(c.teacher) + '">Chọn</button>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+    $$('[data-pick]', m.el).forEach(function (b) {
+      b.onclick = function () {
+        var code = b.getAttribute('data-pick');
+        var c = all.filter(function (x) { return x.teacher === code; })[0];
+        var go = c.feasible ? Promise.resolve(true) : confirmBox(c.name + ' không phù hợp: ' + c.reason + '.\nVẫn gán?', 'Vẫn gán', true);
+        go.then(function (ok) {
+          if (!ok) return;
+          var args = { id: l.id, role: role };
+          args[role] = code;
+          busy(b, call('lessons.assign', args)).then(function (r) { changed('Đã gán ' + c.name, r.warnings); }).catch(showError);
         });
-      }
-      $('#cand-q', m.el).oninput = debounce(draw, 150);
-      $('#cand-ok', m.el).onchange = draw;
-      draw();
-    }).catch(function (e) { $('#cands', m.el).innerHTML = '<div class="alert err">' + esc(e.message) + '</div>'; });
+      };
+    });
   }
+  function load() {
+    $('#cands', m.el).innerHTML = spinner('Đang tính toán…');
+    call('lessons.candidates', { id: l.id, role: role }).then(function (res) { all = res.candidates; draw(); })
+      .catch(function (e) { $('#cands', m.el).innerHTML = '<div class="alert err">' + esc(e.message) + '</div>'; });
+  }
+  $$('#cand-tabs button', m.el).forEach(function (b) {
+    b.onclick = function () {
+      role = b.getAttribute('data-role');
+      $$('#cand-tabs button', m.el).forEach(function (x) { x.classList.toggle('active', x === b); });
+      load();
+    };
+  });
+  $('#cand-q', m.el).oninput = debounce(draw, 150);
+  $('#cand-ok', m.el).onchange = draw;
+  load();
 }
 
 /* ===================== Form thêm / sửa tiết ===================== */
@@ -521,9 +552,14 @@ function schoolOptions(sel, empty) {
   return optionList(App.boot.lookups.schools.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'vi'); })
     .map(function (s) { return [s.code, s.name + ' (' + s.code + ')' + (s.active ? '' : ' – ngừng')]; }), sel, empty);
 }
-function teacherOptions(sel, empty) {
-  return optionList(App.boot.lookups.teachers.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'vi'); })
-    .map(function (t) { return [t.code, t.name + ' (' + t.code + ')' + (t.active ? '' : ' – ngừng')]; }), sel, empty);
+function teacherOptions(sel, empty, which) {
+  var list = which === 'assistant' ? (App.boot.lookups.assistants || []) : which === 'person' ? App.boot.lookups.teachers.concat(App.boot.lookups.assistants || []) : App.boot.lookups.teachers;
+  return optionList(list.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'vi'); })
+    .map(function (t) { return [t.code, t.name + ' (' + t.code + ')' + (which === 'person' && t.type === 'Trợ giảng' ? ' – TG' : '') + (t.active ? '' : ' – ngừng')]; }), sel, empty);
+}
+function classInfo(school, className) {
+  var k = String(className || '').toUpperCase();
+  return (App.boot.lookups.classes || []).filter(function (c) { return c.school === school && c.className.toUpperCase() === k; })[0] || null;
 }
 function subjectOptions(sel, empty) {
   return optionList(App.boot.lookups.subjects.map(function (s) { return [s.code, s.name + ' (' + s.code + ')']; }), sel, empty);
@@ -537,24 +573,39 @@ function lessonForm(l, defaults, onSaved) {
   var body = '<div class="form">' +
     '<div class="field full"><label>Trường *</label><select id="f-school">' + schoolOptions(d.school, '— Chọn trường —') + '</select></div>' +
     '<div class="field"><label>Thứ *</label><select id="f-weekday">' + weekdayOptions(d.weekdayLabel || 'Thứ 2') + '</select></div>' +
-    '<div class="field"><label>Môn *</label><select id="f-subject">' + subjectOptions(d.subject, '— Chọn môn —') + '</select></div>' +
+    '<div class="field"><label>Chương trình</label><select id="f-subject">' + subjectOptions(d.subjectFromClass ? '' : d.subject, '— Theo lớp (sheet LopHoc) —') + '</select><div class="hint" id="f-subj-hint"></div></div>' +
     '<div class="field"><label>Bắt đầu *</label><input type="time" id="f-start" value="' + esc(d.startText || '') + '"></div>' +
     '<div class="field"><label>Kết thúc *</label><input type="time" id="f-end" value="' + esc(d.endText || '') + '"></div>' +
-    '<div class="field"><label>Lớp</label><input type="text" id="f-class" value="' + esc(d.className || '') + '" placeholder="vd. 3A1"></div>' +
+    '<div class="field"><label>Lớp</label><input type="text" id="f-class" list="f-class-list" value="' + esc(d.className || '') + '" placeholder="vd. 3A1"><datalist id="f-class-list"></datalist></div>' +
     '<div class="field"><label>Khối</label><input type="text" id="f-grade" value="' + esc(d.grade || '') + '"></div>' +
     '<div class="field"><label>Số tiết</label><input type="number" id="f-periods" min="0" step="0.5" value="' + esc(d.periods || 1) + '"></div>' +
     '<div class="field"><label>Phòng</label><input type="text" id="f-room" value="' + esc(d.room || '') + '"></div>' +
-    (can('assign') ? '<div class="field"><label>Giáo viên</label><select id="f-teacher">' + teacherOptions(d.teacher, '— Chưa xếp —') + '</select><div class="hint">Mẹo: mở tiết sau khi lưu để xem gợi ý GV phù hợp nhất.</div></div>' +
+    '<div class="field"><label>Cần GV KDI</label><select id="f-needT">' + optionList([['Có', 'Có'], ['Không', 'Không – GV của trường dạy']], d.needTeacherRaw || '', '— Theo lớp / mặc định (Có) —') + '</select></div>' +
+    '<div class="field"><label>Cần trợ giảng</label><select id="f-need">' + optionList([['Có', 'Có'], ['Không', 'Không']], d.needAssistantRaw || '', '— Theo lớp / mặc định —') + '</select></div>' +
+    (can('assign') ? '<div class="field"><label>Giáo viên</label><select id="f-teacher">' + teacherOptions(d.teacher, '— Chưa xếp —') + '</select><div class="hint">Mẹo: mở tiết sau khi lưu để xem gợi ý phù hợp nhất.</div></div>' +
+      '<div class="field"><label>Trợ giảng</label><select id="f-assistant">' + teacherOptions(d.assistant, '— Chưa xếp —', 'assistant') + '</select></div>' +
       '<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" id="f-locked"' + (d.locked ? ' checked' : '') + '> 📌 Ghim – không cho xếp tự động thay đổi</label></div>' : '') +
     '<div class="field full"><label>Ghi chú</label><input type="text" id="f-notes" value="' + esc(d.notes || '') + '"></div></div>';
   var m = modal({ title: l ? 'Sửa tiết ' + l.id : 'Thêm tiết vào TKB', body: body, footer: '<button class="btn" data-close>Hủy</button><button class="btn primary" id="f-save">Lưu</button>' });
+  function syncClass() {
+    var school = $('#f-school', m.el).value;
+    $('#f-class-list', m.el).innerHTML = (App.boot.lookups.classes || []).filter(function (c) { return c.school === school; })
+      .map(function (c) { return '<option value="' + esc(c.className) + '">'; }).join('');
+    var ci = classInfo(school, $('#f-class', m.el).value);
+    var subj = ci && (App.boot.lookups.subjects || []).filter(function (x) { return x.code === ci.subject; })[0];
+    $('#f-subj-hint', m.el).textContent = ci ? 'Lớp này học: ' + (subj ? subj.name : ci.subject) + (ci.needAssistant ? ' · Cần TG: ' + ci.needAssistant : '') : 'Lớp chưa khai báo ở LopHoc – hãy chọn chương trình.';
+  }
+  $('#f-school', m.el).onchange = syncClass;
+  $('#f-class', m.el).oninput = syncClass;
+  syncClass();
   $('#f-save', m.el).onclick = function () {
     var lesson = {
       id: l ? l.id : '', school: $('#f-school', m.el).value, weekday: $('#f-weekday', m.el).value, subject: $('#f-subject', m.el).value,
       start: $('#f-start', m.el).value, end: $('#f-end', m.el).value, className: $('#f-class', m.el).value, grade: $('#f-grade', m.el).value,
       periods: $('#f-periods', m.el).value, room: $('#f-room', m.el).value, notes: $('#f-notes', m.el).value,
+      needAssistant: $('#f-need', m.el).value, needTeacher: $('#f-needT', m.el).value,
     };
-    if (can('assign')) { lesson.teacher = $('#f-teacher', m.el).value; lesson.locked = $('#f-locked', m.el).checked; }
+    if (can('assign')) { lesson.teacher = $('#f-teacher', m.el).value; lesson.assistant = $('#f-assistant', m.el).value; lesson.locked = $('#f-locked', m.el).checked; }
     busy(this, call('lessons.save', { lesson: lesson })).then(function (r) {
       invalidate();
       m.close();
@@ -567,9 +618,9 @@ function lessonForm(l, defaults, onSaved) {
 }
 
 /* ===================== Nhập TKB bằng cách dán từ Excel ===================== */
-var PASTE_COLS = [['weekday', 'Thứ'], ['start', 'Bắt đầu'], ['end', 'Kết thúc'], ['className', 'Lớp'], ['grade', 'Khối'], ['subject', 'Môn (mã hoặc tên)'], ['periods', 'Số tiết'], ['room', 'Phòng'], ['notes', 'Ghi chú']];
+var PASTE_COLS = [['weekday', 'Thứ'], ['start', 'Bắt đầu'], ['end', 'Kết thúc'], ['className', 'Lớp'], ['grade', 'Khối'], ['subject', 'Chương trình (để trống = theo lớp)'], ['periods', 'Số tiết'], ['room', 'Phòng'], ['notes', 'Ghi chú']];
 function pasteImport(defaultSchool, onDone) {
-  var sample = 'Thứ 2\t07:30\t08:05\t1A1\t1\tRB\t1\tSTEM 1\nThứ 2\t08:15\t08:50\t1A2\t1\tRB\t1\tSTEM 1\nThứ 4\t14:00\t14:35\t3A1\t3\tLập trình Scratch\t1\tSTEM 1';
+  var sample = 'Thứ 2\t07:40\t08:15\t1A1\t1\tG01\t1\tSTEM 1\nThứ 2\t08:20\t08:55\t1A2\t1\t\t1\tSTEM 1\nThứ 4\t14:00\t14:35\t3A1\t3\tSchool - Grade 03\t1\tSTEM 1';
   var body = '<div class="alert info">Sao chép các dòng TKB từ Excel/Google Sheets rồi dán vào ô dưới. Thứ tự cột: <b>' +
     PASTE_COLS.map(function (c) { return c[1]; }).join(' | ') + '</b>. Có thể bật "Cột đầu là Mã trường" để nhập nhiều trường một lần.</div>' +
     '<div class="form"><div class="field"><label>Trường</label><select id="p-school">' + schoolOptions(defaultSchool, '— Cột đầu là Mã trường —') + '</select></div>' +
@@ -592,7 +643,7 @@ function pasteImport(defaultSchool, onDone) {
     $('#p-preview', m.el).innerHTML = !parsed.length ? '' : '<h3>Xem trước (' + parsed.length + ' dòng)</h3><div class="table-wrap" style="max-height:260px;overflow:auto"><table class="tbl"><thead><tr>' +
       (school ? '' : '<th>Mã trường</th>') + PASTE_COLS.map(function (c) { return '<th>' + esc(c[1]) + '</th>'; }).join('') + '</tr></thead><tbody>' +
       parsed.map(function (r) {
-        var bad = !r.weekday || !toMin(r.start) || !toMin(r.end) || !r.subject;
+        var bad = !r.weekday || !toMin(r.start) || !toMin(r.end);
         return '<tr class="' + (bad ? 'row-err' : '') + '">' + (school ? '' : '<td>' + esc(r.school) + '</td>') + PASTE_COLS.map(function (c) { return '<td>' + esc(r[c[0]]) + '</td>'; }).join('') + '</tr>';
       }).join('') + '</tbody></table></div>';
   }

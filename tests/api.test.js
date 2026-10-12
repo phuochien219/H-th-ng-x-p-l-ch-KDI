@@ -37,7 +37,7 @@ test('tài khoản mới mặc định "Xem lịch": xem được, không sửa 
   assert.equal(me.status, 'ok');
   assert.equal(me.role, 'viewer');
   assert.equal(call('new.staff@kdi.edu.vn', 'dashboard').ok, true);
-  const save = call('new.staff@kdi.edu.vn', 'lessons.save', { lesson: { school: 'TR001', weekday: 'Thứ 2', start: '08:00', end: '08:45', subject: 'RB' } });
+  const save = call('new.staff@kdi.edu.vn', 'lessons.save', { lesson: { school: 'TR001', weekday: 'Thứ 2', start: '08:00', end: '08:45', subject: 'G01' } });
   assert.equal(save.ok, false);
   assert.equal(save.code, 'FORBIDDEN');
   // Không thấy dữ liệu cá nhân của GV.
@@ -95,7 +95,7 @@ test('giáo viên đăng nhập bằng email của mình chỉ xem lịch của 
 
 test('Sale nhập TKB nhưng không được phân công GV', () => {
   const { call } = fresh();
-  const add = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { school: 'tr001', weekday: 'T3', start: '7h30', end: '8h15', subject: 'Robotics', className: '5A9' } });
+  const add = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { school: 'tr001', weekday: 'T3', start: '7h30', end: '8h15', subject: 'Grade 05', className: '5A9' } });
   assert.equal(add.ok, true, add.error);
   const id = add.data.id;
   assert.match(id, /^TKB-\d{6}$/);
@@ -104,14 +104,14 @@ test('Sale nhập TKB nhưng không được phân công GV', () => {
   assert.equal(l.school, 'TR001');
   assert.equal(l.weekdayLabel, 'Thứ 3');
   assert.equal(l.startText, '07:30');
-  assert.equal(l.subject, 'RB');
+  assert.equal(l.subject, 'G05');
   assert.equal(call('sale@kdi.edu.vn', 'lessons.assign', { id, teacher: 'GV001' }).code, 'FORBIDDEN');
   assert.equal(call('sale@kdi.edu.vn', 'lessons.save', { lesson: Object.assign({}, l, { teacher: 'GV001', start: l.startText, end: l.endText, weekday: l.weekdayLabel }) }).code, 'FORBIDDEN');
   // Sửa giờ (giữ GV) thì được.
-  const edit = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { id, school: 'TR001', weekday: 'Thứ 3', start: '09:00', end: '09:45', subject: 'RB', className: '5A9' } });
+  const edit = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { id, school: 'TR001', weekday: 'Thứ 3', start: '09:00', end: '09:45', subject: 'G01', className: '5A9' } });
   assert.equal(edit.ok, true, edit.error);
   // Dữ liệu sai bị từ chối.
-  const bad = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { school: 'TR001', weekday: 'Thứ 9', start: '09:00', end: '09:45', subject: 'RB' } });
+  const bad = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { school: 'TR001', weekday: 'Thứ 9', start: '09:00', end: '09:45', subject: 'G01' } });
   assert.equal(bad.ok, false);
   assert.match(bad.error, /Thứ/);
 });
@@ -121,9 +121,9 @@ test('nhập TKB hàng loạt (dán từ Excel) và thay thế TKB cũ của tr�
   const before = call('sale@kdi.edu.vn', 'lessons.list').data.filter((l) => l.school === 'TR002').length;
   assert.ok(before > 0);
   const rows = [
-    { weekday: 'Thứ 2', start: '07:30', end: '08:05', className: '1A1', grade: '1', subject: 'RB' },
-    { weekday: 'thứ hai', start: '08:15', end: '08:50', className: '1A2', grade: '1', subject: 'scratch' },
-    { weekday: 'Thứ 8', start: '08:15', end: '08:50', className: '1A3', grade: '1', subject: 'SCR' },
+    { weekday: 'Thứ 2', start: '07:30', end: '08:05', className: '1A1', grade: '1', subject: 'G01' },
+    { weekday: 'thứ hai', start: '08:15', end: '08:50', className: '1A2', grade: '1', subject: 'grade 02' },
+    { weekday: 'Thứ 8', start: '08:15', end: '08:50', className: '1A3', grade: '1', subject: 'G02' },
   ];
   const strict = call('sale@kdi.edu.vn', 'lessons.bulkAdd', { school: 'TR002', rows, replaceSchool: true });
   assert.equal(strict.ok, true);
@@ -134,9 +134,9 @@ test('nhập TKB hàng loạt (dán từ Excel) và thay thế TKB cũ của tr�
   assert.equal(ok.data.removed, before);
   const tr2 = call('sale@kdi.edu.vn', 'lessons.list').data.filter((l) => l.school === 'TR002');
   assert.equal(tr2.length, 2);
-  assert.ok(tr2.some((l) => l.subject === 'SCR'), 'nhận diện tên môn rút gọn "scratch"');
+  assert.ok(tr2.some((l) => l.subject === 'G02'), 'nhận diện tên chương trình rút gọn "grade 02"');
   // Tên môn mơ hồ (khớp nhiều môn) bị từ chối.
-  const amb = call('sale@kdi.edu.vn', 'lessons.bulkAdd', { school: 'TR002', rows: [{ weekday: 'Thứ 3', start: '08:00', end: '08:40', subject: 'a' }] });
+  const amb = call('sale@kdi.edu.vn', 'lessons.bulkAdd', { school: 'TR002', rows: [{ weekday: 'Thứ 3', start: '08:00', end: '08:40', subject: 'grade' }] });
   assert.equal(amb.data.added, 0);
 });
 
@@ -155,7 +155,9 @@ test('xếp lịch tự động: xem trước → áp dụng → hoàn tác', ()
   assert.equal(applied.ok, true, applied.error);
   assert.equal(applied.data.applied, run.data.items.length);
   const lessons = call(AC, 'lessons.list').data;
-  assert.equal(lessons.filter((l) => l.teacher).length, run.data.stats.assigned);
+  assert.equal(lessons.filter((l) => l.teacher).length, run.data.byRole.teacher.assigned);
+  assert.equal(lessons.filter((l) => l.assistant).length, run.data.byRole.assistant.assigned);
+  assert.ok(run.data.byRole.assistant.assigned > 500);
   assert.ok(lessons.filter((l) => l.teacher).every((l) => l.source === 'Tự động' && /^Điểm/.test(l.explain)));
   const conflicts = call(AC, 'conflicts.list').data;
   assert.equal(conflicts.filter((c) => c.severity === 'error').length, 0);
@@ -173,6 +175,7 @@ test('xếp lịch tự động: xem trước → áp dụng → hoàn tác', ()
   assert.equal(reverted.data.skipped, 1);
   const after = call(AC, 'lessons.list').data;
   assert.equal(after.filter((l) => l.teacher).length, 1);
+  assert.equal(after.filter((l) => l.assistant).length, 0);
   assert.equal(after.find((l) => l.id === target.id).teacher, other.teacher);
   const history = call(AC, 'auto.history').data;
   assert.equal(history[0].status, 'Đã hoàn tác');
@@ -185,7 +188,7 @@ test('áp dụng bỏ qua tiết đã thay đổi sau khi xem trước', () => {
   const item = run.items.find((i) => i.assigned);
   assert.equal(call(AC, 'lessons.assign', { id: item.lesson.id, teacher: 'GV001', locked: true }).ok, true);
   const res = call(AC, 'auto.apply', { id: run.id }).data;
-  assert.equal(res.skipped, 1);
+  assert.ok(res.skipped >= 1);
   const l = call(AC, 'lessons.list').data.find((x) => x.id === item.lesson.id);
   assert.equal(l.teacher, 'GV001');
   assert.equal(l.locked, true);
@@ -214,7 +217,7 @@ test('gán tay có cảnh báo khi trùng lịch', () => {
 test('quản lý danh mục: kiểm tra dữ liệu & ràng buộc tham chiếu', () => {
   const { call } = fresh();
   const AC = 'scheduler@kdi.edu.vn';
-  const bad = call(AC, 'data.save', { table: 'teachers', record: { code: 'GV999', name: 'Test', subjects: ['RB', 'XYZ'] } });
+  const bad = call(AC, 'data.save', { table: 'training', record: { teacher: 'GV001', subject: 'XYZ' } });
   assert.equal(bad.ok, false);
   assert.match(bad.error, /XYZ/);
   const badEmail = call(AC, 'data.save', { table: 'teachers', record: { code: 'GV999', name: 'Test', email: 'a@gmail.com' } });
@@ -228,7 +231,9 @@ test('quản lý danh mục: kiểm tra dữ liệu & ràng buộc tham chiếu'
   assert.equal(edit.ok, true, edit.error);
   const row = call(AC, 'data.list', { table: 'teachers' }).data.rows.find((r) => r.code === 'GV999');
   assert.equal(row.name, 'Đã sửa');
-  assert.equal(row.subjects, 'RB, SCR');
+  // Đào tạo chương trình: mỗi dòng 1 GV × 1 chương trình.
+  assert.equal(call(AC, 'data.save', { table: 'training', record: { teacher: 'GV999', subject: 'G03', status: 'Đạt' } }).ok, true);
+  assert.equal(call(AC, 'data.save', { table: 'training', record: { teacher: 'GV999', subject: 'G03' } }).ok, false, 'trùng GV × chương trình');
   // Lịch bận + liên kết trường.
   assert.equal(call(AC, 'data.save', { table: 'unavailability', record: { teacher: 'GV999', weekday: 'Thứ 4', start: '13:00', end: '12:00' } }).ok, false);
   const ub = call(AC, 'data.save', { table: 'unavailability', record: { teacher: 'GV999', weekday: 'Thứ 4', start: '13:00', end: '17:00', reason: 'Học' } });
@@ -252,8 +257,10 @@ test('lịch theo GV/trường, lịch trống, tổng quan', () => {
   const run = call(AC, 'auto.run', { mode: 'fill' }).data;
   call(AC, 'auto.apply', { id: run.id });
   const dash = call('viewer@kdi.edu.vn', 'dashboard').data;
-  assert.equal(dash.counts.schools, 72);
-  assert.ok(dash.loads.length > 100);
+  assert.equal(dash.counts.schools, 45);
+  assert.ok(dash.loads.length > 70);
+  assert.ok(dash.assistantLoads.length > 60);
+  assert.equal(dash.counts.missingTA, 0);
   const t = call('viewer@kdi.edu.vn', 'schedule.teacher', { code: 'GV001' }).data;
   assert.equal(t.teacher.phone, undefined, 'viewer không thấy SĐT');
   const tAC = call(AC, 'schedule.teacher', { code: 'GV001' }).data;
@@ -266,7 +273,8 @@ test('lịch theo GV/trường, lịch trống, tổng quan', () => {
   assert.ok(free.rows[0].fitsRange);
   assert.equal(free.rows[0].distance, null, 'viewer không thấy khoảng cách');
   const lists = call('viewer@kdi.edu.vn', 'overview.lists').data;
-  assert.equal(lists.schools.length, 72);
+  assert.equal(lists.schools.length, 45);
+  assert.ok(lists.teachers.some((t) => t.role === 'assistant'));
 });
 
 test('đăng nhập bằng mã OTP khi không có phiên Google', () => {
@@ -308,9 +316,10 @@ test('cấu hình, nhật ký, xuất Google Sheets, gửi email', () => {
   const exp = call('viewer@kdi.edu.vn', 'export.sheet');
   assert.equal(exp.ok, true, exp.error);
   const out = env.created[env.created.length - 1];
-  assert.deepEqual(out.getSheets().map((s) => s.getName()), ['Lịch theo GV', 'Lịch theo trường', 'Chi tiết TKB', 'Tổng hợp giờ dạy', 'Chưa xếp GV', 'Cảnh báo']);
+  assert.deepEqual(out.getSheets().map((s) => s.getName()), ['Lịch theo GV', 'Lịch theo trợ giảng', 'Lịch theo trường', 'Chi tiết TKB', 'Tổng hợp giờ dạy', 'Chưa xếp', 'Cảnh báo']);
   assert.ok(out.editors.includes('viewer@kdi.edu.vn'));
-  assert.ok(out.getSheetByName('Lịch theo GV').getLastRow() > 100);
+  assert.ok(out.getSheetByName('Lịch theo GV').getLastRow() > 70);
+  assert.ok(out.getSheetByName('Lịch theo trợ giảng').getLastRow() > 60);
 
   assert.equal(call('viewer@kdi.edu.vn', 'email.schedules', { teachers: ['GV001'] }).code, 'FORBIDDEN');
   const before = env.sentMail.length;
@@ -359,7 +368,7 @@ test('dòng checkbox FALSE thừa không làm lệch vị trí thêm dòng', () 
   const before = ctx.Db.read('lessons').length;
   // Người dùng chèn checkbox cho cả cột "Ghim" trên Sheets.
   sh.getRange(2, 12, sh.getMaxRows() - 1, 1).insertCheckboxes();
-  const add = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { school: 'TR001', weekday: 'Thứ 6', start: '16:00', end: '16:40', subject: 'RB' } });
+  const add = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { school: 'TR001', weekday: 'Thứ 6', start: '16:00', end: '16:40', subject: 'G01' } });
   assert.equal(add.ok, true, add.error);
   ctx.Db.clearCache();
   const rows = ctx.Db.read('lessons');
@@ -371,23 +380,23 @@ test('nhập dữ liệu hàng loạt từ Excel: kiểm tra, thêm/cập nhật
   const { call, ctx } = fresh();
   const AC = 'scheduler@kdi.edu.vn';
   const spec = call(AC, 'import.spec').data;
-  assert.deepEqual(spec.map((s) => s.table), ['subjects', 'schools', 'teachers', 'links', 'unavailability', 'lessons']);
+  assert.deepEqual(spec.map((s) => s.table), ['subjects', 'schools', 'classes', 'teachers', 'training', 'assistants', 'assistantFree', 'links', 'unavailability', 'lessons']);
   assert.ok(spec.every((s) => s.examples.length && s.examples[0].length === s.columns.length));
   assert.ok(call(SUPER, 'import.spec').data.some((s) => s.table === 'users'));
-  assert.equal(call('sale@kdi.edu.vn', 'import.spec').data.map((s) => s.table).join(','), 'schools,lessons');
+  assert.equal(call('sale@kdi.edu.vn', 'import.spec').data.map((s) => s.table).join(','), 'schools,classes,lessons');
 
   // GV: 1 dòng mới, 1 dòng cập nhật, 1 dòng lỗi → mặc định không ghi gì.
   const rows = [
     { _line: 2, code: 'GV500', name: 'GV Mới', type: 'kiem nhiem', rating: 'a', subjects: 'RB, SCR', email: 'gv.moi@kdi.edu.vn' },
     { _line: 3, code: 'GV001', name: 'Tên Mới GV001', type: 'Thường', subjects: 'RB' },
-    { _line: 4, code: 'GV501', name: 'Lỗi', subjects: 'XYZ' },
+    { _line: 4, code: 'GV501', name: 'Lỗi', type: 'Bán thời gian' },
   ];
   const dry = call(AC, 'import.data', { table: 'teachers', rows, mode: 'upsert' }).data;
   assert.equal(dry.written, false);
   assert.equal(dry.inserted, 1);
   assert.equal(dry.updated, 1);
   assert.deepEqual(dry.errors.length, 1);
-  assert.match(dry.errors[0], /^Dòng 4: .*XYZ/);
+  assert.match(dry.errors[0], /^Dòng 4: .*Bán thời gian/);
   const ok = call(AC, 'import.data', { table: 'teachers', rows, mode: 'upsert', skipErrors: true }).data;
   assert.equal(ok.written, true);
   const teachers = call(AC, 'data.list', { table: 'teachers' }).data.rows;
@@ -407,8 +416,8 @@ test('nhập dữ liệu hàng loạt từ Excel: kiểm tra, thêm/cập nhật
   const before = call(AC, 'lessons.list').data;
   const tr3 = before.filter((l) => l.school === 'TR003').length;
   const tkb = call(AC, 'import.data', { table: 'lessons', mode: 'replace', rows: [
-    { school: 'TR003', weekday: 'Thứ 2', start: '7:30', end: '8:15', className: '5A1', subject: 'RB', teacher: 'GV002' },
-    { school: 'TR003', weekday: 'Thứ 3', start: '07:30', end: '08:15', className: '5A2', subject: 'Robotics' },
+    { school: 'TR003', weekday: 'Thứ 2', start: '7:30', end: '8:15', className: '5A1', subject: 'G01', teacher: 'GV002' },
+    { school: 'TR003', weekday: 'Thứ 3', start: '07:30', end: '08:15', className: '5A2', subject: 'Grade 05' },
   ] }).data;
   assert.equal(tkb.written, true, JSON.stringify(tkb.errors));
   assert.equal(tkb.removed, tr3);
@@ -416,7 +425,7 @@ test('nhập dữ liệu hàng loạt từ Excel: kiểm tra, thêm/cập nhật
   assert.equal(after.length, before.length - tr3 + 2);
   assert.equal(after.filter((l) => l.school === 'TR003' && l.teacher === 'GV002').length, 1);
   // Sale không được gán GV qua file.
-  const saleTkb = call('sale@kdi.edu.vn', 'import.data', { table: 'lessons', rows: [{ school: 'TR004', weekday: 'Thứ 2', start: '07:30', end: '08:15', subject: 'RB', teacher: 'GV002' }] }).data;
+  const saleTkb = call('sale@kdi.edu.vn', 'import.data', { table: 'lessons', rows: [{ school: 'TR004', weekday: 'Thứ 2', start: '07:30', end: '08:15', subject: 'G01', teacher: 'GV002' }] }).data;
   assert.match(saleTkb.errors[0], /không có quyền phân công/);
   assert.equal(call('sale@kdi.edu.vn', 'import.data', { table: 'teachers', rows }).code, 'FORBIDDEN');
 
@@ -443,17 +452,87 @@ test('dữ liệu lưu tạm: đọc nhanh nhưng luôn mới sau khi ghi', () =
   const sh = ctx.Db.sheet('schools', false);
   const saved = sh.rows;
   sh.rows = [saved[0]];
-  assert.equal(call(AC, 'overview.lists').data.schools.length, 72);
+  assert.equal(call(AC, 'overview.lists').data.schools.length, 45);
   sh.rows = saved;
   // Ghi qua hệ thống → ảnh chụp bị xóa, lần đọc sau thấy dữ liệu mới.
   assert.equal(call('sale@kdi.edu.vn', 'data.save', { table: 'schools', record: { code: 'TR901', name: 'TH Mới' } }).ok, true);
-  assert.equal(call(AC, 'overview.lists').data.schools.length, 73);
+  assert.equal(call(AC, 'overview.lists').data.schools.length, 46);
   // Sửa tay trên Sheets → onEdit xóa ảnh chụp.
   ctx.onEdit({});
   assert.ok(!env.cache.has('snap_meta'));
   // Khởi động gộp 1 lần gọi.
   const start = call(AC, 'app.start').data;
   assert.equal(start.user.status, 'ok');
-  assert.ok(start.lookups.schools.length >= 73);
+  assert.ok(start.lookups.schools.length >= 46);
   assert.equal(call('x@gmail.com', 'app.start').data.user.status, 'forbidden');
+});
+
+test('Google Maps: tọa độ từ link rút gọn / địa chỉ, tính khoảng cách xe máy theo lô', () => {
+  const { call, env, ctx } = fresh();
+  const AC = 'scheduler@kdi.edu.vn';
+  // Trường dùng link rút gọn, GV dùng địa chỉ chữ.
+  env.redirects = { 'https://maps.app.goo.gl/abc123': 'https://www.google.com/maps/place/TH+Kim+%C4%90%E1%BB%93ng/@21.03,105.81,17z/data=!3d21.0355!4d105.8155' };
+  env.geocode = { '12 Láng Hạ, Đống Đa, Hà Nội': { lat: 21.0189, lng: 105.8152 } };
+  assert.equal(call(AC, 'data.save', { table: 'schools', originalKey: 'TR001', record: { code: 'TR001', name: 'TH Kim Đồng', mapUrl: 'https://maps.app.goo.gl/abc123' } }).ok, true);
+  assert.equal(call(AC, 'data.save', { table: 'teachers', originalKey: 'GV001', record: { code: 'GV001', name: 'GV 1', mapUrl: '12 Láng Hạ, Đống Đa, Hà Nội' } }).ok, true);
+  // Link đầy đủ thì lấy tọa độ ngay khi lưu.
+  assert.equal(call(AC, 'data.save', { table: 'schools', originalKey: 'TR002', record: { code: 'TR002', name: 'TR2', mapUrl: 'https://maps.google.com/?q=21.0500,105.8000' } }).ok, true);
+  ctx.Db.clearCache();
+  const tr2 = ctx.Db.read('schools').find((s) => s.code === 'TR002');
+  assert.equal(tr2.lat, 21.05);
+
+  env.mapsQuota = 300;
+  const r1 = call(AC, 'maps.update');
+  assert.equal(r1.ok, true, r1.error);
+  assert.equal(r1.data.coordsUpdated, 2);
+  assert.deepEqual(r1.data.coordsFailed, []);
+  assert.equal(r1.data.quotaExceeded, true, 'hết hạn mức thì dừng, lưu phần đã tính');
+  assert.equal(r1.data.computed, 300);
+  assert.ok(r1.data.remaining > 0);
+  env.mapsQuota = undefined;
+  let r = call(AC, 'maps.update').data;
+  assert.equal(r.remaining, 0);
+  assert.equal(call(AC, 'maps.update').data.computed, 0, 'đã đủ số liệu thì không tính lại');
+  const tr1 = ctx.Db.read('schools').find((s) => s.code === 'TR001');
+  assert.equal(tr1.lat, 21.0355);
+  const t = call(AC, 'schedule.teacher', { code: 'GV001' }).data;
+  assert.ok(t.nearestSchools.some((x) => x.source === 'maps'));
+  assert.equal(call('viewer@kdi.edu.vn', 'maps.update').code, 'FORBIDDEN');
+});
+
+test('file nhập liệu Google Sheets có danh sách thả xuống và nhập lại từ link', () => {
+  const { call, env } = fresh();
+  const AC = 'scheduler@kdi.edu.vn';
+  const tpl = call(AC, 'import.template');
+  assert.equal(tpl.ok, true, tpl.error);
+  assert.match(tpl.data.xlsxUrl, /export\?format=xlsx/);
+  const file = env.created[env.created.length - 1];
+  assert.deepEqual(file.getSheets().map((s) => s.getName()), ['HuongDan', 'MonHoc', 'TruongHoc', 'LopHoc', 'GiaoVien', 'GV_DaoTao', 'TroGiang', 'TG_LichRanh', 'GV_Truong', 'LichBan', 'TKB']);
+  assert.ok(file.editors.includes(AC));
+  assert.ok(file.getSheetByName('TKB').getLastRow() > 600, 'kèm dữ liệu hiện có');
+  const read = call(AC, 'import.readSheet', { url: tpl.data.url });
+  assert.equal(read.ok, true, read.error);
+  const tkb = read.data.sheets.find((s) => s.name === 'TKB');
+  assert.equal(tkb.aoa[0][0], 'ID');
+  assert.equal(call(AC, 'import.readSheet', { url: 'abc' }).ok, false);
+});
+
+test('nâng cấp từ bản cũ: cột "Môn đã đào tạo" được chuyển sang GV_DaoTao', () => {
+  const { ctx, env } = createGasEnv();
+  ctx.setupSheets();
+  ctx.Db.clearCache();
+  const sh = ctx.Db.sheet('teachers', false);
+  const lastCol = sh.getLastColumn();
+  sh.getRange(1, lastCol + 1).setValue('Môn đã đào tạo');
+  sh.getRange(2, 1, 1, 2).setValues([['GV001', 'Cô A']]);
+  sh.getRange(2, lastCol + 1).setValue('G01, G02');
+  env.setUser(SUPER);
+  ctx.Db.clearCache();
+  ctx.setupSheets();
+  ctx.Db.clearCache();
+  const tr = ctx.Db.read('training').map((r) => r.teacher + ':' + r.subject + ':' + r.status);
+  assert.deepEqual(JSON.parse(JSON.stringify(tr)), ['GV001:G01:Đạt', 'GV001:G02:Đạt']);
+  ctx.setupSheets();
+  ctx.Db.clearCache();
+  assert.equal(ctx.Db.read('training').length, 2, 'chạy lại không nhân đôi');
 });
