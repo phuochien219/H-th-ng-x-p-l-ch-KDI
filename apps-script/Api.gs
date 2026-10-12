@@ -207,12 +207,9 @@ function normalizeLessonInput_(ctx, input) {
   var subject = str(input.subject).toUpperCase();
   if (!subject) return { error: 'Thiếu mã môn' };
   if (!ctx.subjects[subject]) {
-    // Cho phép nhập theo tên môn.
-    var byName = Object.keys(ctx.subjects).filter(function (k) {
-      return removeDiacritics_(ctx.subjects[k].name).toLowerCase() === removeDiacritics_(input.subject).toLowerCase();
-    })[0];
-    if (!byName) return { error: 'Môn "' + input.subject + '" không có trong danh mục môn học' };
-    subject = byName;
+    var found = findSubjectByName_(ctx, input.subject);
+    if (!found) return { error: 'Môn "' + input.subject + '" không có trong danh mục môn học (dùng mã môn hoặc tên môn)' };
+    subject = found;
   }
   var periods = toNum(input.periods);
   return {
@@ -222,6 +219,17 @@ function normalizeLessonInput_(ctx, input) {
       periods: periods === null ? 1 : periods, room: str(input.room), notes: str(input.notes),
     },
   };
+}
+
+/** Tìm mã môn theo tên: khớp đúng tên, hoặc tên chứa từ khóa nếu chỉ có 1 môn khớp. */
+function findSubjectByName_(ctx, text) {
+  var q = removeDiacritics_(str(text)).toLowerCase();
+  if (!q) return '';
+  var codes = Object.keys(ctx.subjects);
+  var exact = codes.filter(function (k) { return removeDiacritics_(ctx.subjects[k].name).toLowerCase() === q; });
+  if (exact.length === 1) return exact[0];
+  var partial = codes.filter(function (k) { return removeDiacritics_(ctx.subjects[k].name).toLowerCase().indexOf(q) >= 0; });
+  return partial.length === 1 ? partial[0] : '';
 }
 
 function saveLesson_(args, user) {

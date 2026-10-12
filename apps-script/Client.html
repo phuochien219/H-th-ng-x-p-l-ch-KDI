@@ -1,0 +1,614 @@
+<script>
+'use strict';
+/* =====================================================================
+ * KDI Scheduler – phần lõi phía trình duyệt: gọi API, điều hướng, khung
+ * giao diện, các thành phần dùng chung (lưới lịch tuần, hộp thoại, ...).
+ * ===================================================================== */
+var App = { user: null, boot: null, route: { name: '', param: '' }, cache: {}, memToken: '' };
+
+/* ---------------------------- Gọi máy chủ ---------------------------- */
+var TOKEN_KEY = 'kdi_scheduler_token';
+function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || App.memToken || ''; } catch (e) { return App.memToken || ''; }
+}
+function setToken(t) {
+  App.memToken = t || '';
+  try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch (e) { /* trình duyệt chặn bộ nhớ */ }
+}
+
+function call(action, args) {
+  return new Promise(function (resolve, reject) {
+    google.script.run
+      .withSuccessHandler(function (raw) {
+        var res;
+        try { res = JSON.parse(raw); } catch (e) { reject(new Error('Phản hồi không hợp lệ từ máy chủ.')); return; }
+        if (res.ok) { resolve(res.data); return; }
+        var err = new Error(res.error || 'Lỗi không xác định');
+        err.code = res.code;
+        if (res.code === 'AUTH' && action !== 'auth.me') onAuthLost(res.error);
+        reject(err);
+      })
+      .withFailureHandler(function (e) {
+        reject(new Error((e && e.message) || String(e) || 'Không kết nối được máy chủ.'));
+      })
+      .api(action, args || {}, getToken());
+  });
+}
+
+/* ------------------------------ Tiện ích ------------------------------ */
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+function can(perm) { return !!(App.user && App.user.perms && App.user.perms.indexOf(perm) >= 0); }
+function canAny() { for (var i = 0; i < arguments.length; i++) if (can(arguments[i])) return true; return false; }
+function fmtH(h) { return (Math.round(h * 10) / 10).toString().replace('.', ',') + 'h'; }
+function fmtNum(n) { return n === null || n === undefined || n === '' ? '' : (Math.round(n * 10) / 10).toString().replace('.', ','); }
+function toMin(s) { var m = String(s || '').match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; }
+function fmtMin(m) { var h = Math.floor(m / 60), mm = m % 60; return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm; }
+function weekdayName(i) { return (App.boot && App.boot.weekdays[i]) || ''; }
+function debounce(fn, ms) { var t; return function () { var a = arguments, self = this; clearTimeout(t); t = setTimeout(function () { fn.apply(self, a); }, ms || 250); }; }
+function norm(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase(); }
+function matches(q, fields) { q = norm(q).trim(); if (!q) return true; var hay = norm(fields.join(' ')); return q.split(/\s+/).every(function (w) { return hay.indexOf(w) >= 0; }); }
+function subjectColor(code) {
+  var s = (App.boot.lookups.subjects || []).filter(function (x) { return x.code === code; })[0];
+  return (s && s.color) || '#2d5aa8';
+}
+function loadClass(ratio, load, max) { return load > max + 1e-9 ? 'over' : ratio > 1 + 1e-9 ? 'high' : ratio >= 0.8 ? 'ok' : load > 0 ? 'low' : 'none'; }
+function loadBar(load, target, max) {
+  var scale = Math.max(max, load, target) || 1;
+  var cls = loadClass(load / (target || 1), load, max);
+  return '<div class="bar ' + cls + '" title="' + fmtH(load) + ' / định mức ' + fmtH(target) + ' (tối đa ' + fmtH(max) + ')">' +
+    '<span style="width:' + Math.min(100, load / scale * 100) + '%"></span><i class="target" style="left:' + (target / scale * 100) + '%"></i></div>';
+}
+var LOAD_LABEL = { over: 'Vượt tối đa', high: 'Trên định mức', ok: 'Đạt', low: 'Thiếu giờ', none: 'Chưa có lịch' };
+var LOAD_BADGE = { over: 'err', high: 'warn', ok: 'ok', low: 'info', none: '' };
+
+function toast(msg, type, ms) {
+  var el = document.createElement('div');
+  el.className = 'toast ' + (type || '');
+  el.textContent = msg;
+  $('#toast-root').appendChild(el);
+  setTimeout(function () { el.remove(); }, ms || (type === 'err' ? 7000 : 3500));
+}
+function showError(e) { toast((e && e.message) || String(e), 'err'); }
+function spinner(text) { return '<div class="loading"><span class="spinner"></span> ' + esc(text || 'Đang tải…') + '</div>'; }
+
+/** Hộp thoại. Trả về { el, close }. */
+function modal(opts) {
+  var back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = '<div class="modal ' + (opts.wide ? 'wide' : '') + '"><div class="m-head"><h3>' + esc(opts.title || '') + '</h3>' +
+    '<button class="x" title="Đóng">×</button></div><div class="m-body">' + (opts.body || '') + '</div>' +
+    (opts.footer !== false ? '<div class="m-foot">' + (opts.footer || '<button class="btn" data-close>Đóng</button>') + '</div>' : '') + '</div>';
+  $('#modal-root').appendChild(back);
+  function close() { back.remove(); document.removeEventListener('keydown', onKey); if (opts.onClose) opts.onClose(); }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  $('.x', back).onclick = close;
+  back.addEventListener('mousedown', function (e) { if (e.target === back) close(); });
+  $$('[data-close]', back).forEach(function (b) { b.onclick = close; });
+  var api = { el: back, body: $('.m-body', back), foot: $('.m-foot', back), close: close };
+  if (opts.onMount) opts.onMount(api);
+  return api;
+}
+function confirmBox(message, okText, danger) {
+  return new Promise(function (resolve) {
+    var done = false;
+    var m = modal({
+      title: 'Xác nhận', body: '<p style="white-space:pre-line">' + esc(message) + '</p>',
+      footer: '<button class="btn" data-close>Hủy</button><button class="btn ' + (danger ? 'danger' : 'primary') + '" data-ok>' + esc(okText || 'Đồng ý') + '</button>',
+      onClose: function () { if (!done) resolve(false); },
+    });
+    $('[data-ok]', m.el).onclick = function () { done = true; m.close(); resolve(true); };
+  });
+}
+/** Khóa nút trong lúc chờ. */
+function busy(btn, promise) {
+  var old = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> ' + old;
+  return promise.then(function (r) { btn.disabled = false; btn.innerHTML = old; return r; },
+    function (e) { btn.disabled = false; btn.innerHTML = old; throw e; });
+}
+
+/** Tải CSV (mở được bằng Excel, có BOM UTF-8). */
+function downloadCsv(filename, headers, rows) {
+  var lines = [headers].concat(rows).map(function (r) {
+    return r.map(function (v) { v = v === null || v === undefined ? '' : String(v); return /[",;\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',');
+  });
+  var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+function lessonsCsv(filename, lessons) {
+  downloadCsv(filename, ['Thứ', 'Bắt đầu', 'Kết thúc', 'Mã trường', 'Trường', 'Lớp', 'Khối', 'Môn', 'Số tiết', 'Phòng', 'Mã GV', 'Giáo viên', 'Ghim'],
+    lessons.map(function (l) {
+      return [l.weekdayLabel, l.startText, l.endText, l.school, l.schoolName, l.className, l.grade, l.subjectName, l.periods, l.room, l.teacher, l.teacherName, l.locked ? 'x' : ''];
+    }));
+}
+
+/* ------------------------- Dữ liệu dùng chung (cache) ------------------------- */
+function cached(key, loader) {
+  if (App.cache[key]) return Promise.resolve(App.cache[key]);
+  return loader().then(function (d) { App.cache[key] = d; return d; });
+}
+/** Gọi sau khi dữ liệu thay đổi. */
+function invalidate() { App.cache = {}; refreshBadge(); }
+function refreshBadge() {
+  if (!can('view_schedule')) return;
+  call('overview.lists').then(function (d) {
+    App.cache.lists = d;
+    var n = d.teachers.reduce(function (s, t) { return s + t.conflicts; }, 0);
+    var el = $('#nav-conflicts .count');
+    if (el) { el.textContent = n; el.style.display = n ? '' : 'none'; }
+  }).catch(function () {});
+}
+
+/* ------------------------------- Điều hướng ------------------------------- */
+var ROUTES = {};
+function hasGasHistory() { return typeof google !== 'undefined' && google.script && google.script.history; }
+function parseHash(h) {
+  h = String(h || '').replace(/^#/, '');
+  var i = h.indexOf('/');
+  return i < 0 ? { name: h, param: '' } : { name: h.slice(0, i), param: decodeURIComponent(h.slice(i + 1)) };
+}
+function navigate(name, param, noPush) {
+  App.route = { name: name, param: param || '' };
+  var hash = name + (param ? '/' + encodeURIComponent(param) : '');
+  if (!noPush) {
+    try {
+      if (hasGasHistory()) google.script.history.push({ route: hash }, {}, hash);
+      else history.pushState({ route: hash }, '', '#' + hash);
+    } catch (e) { /* bỏ qua */ }
+  }
+  document.body.classList.remove('nav-open');
+  renderRoute();
+}
+function defaultRoute() {
+  if (can('view_schedule')) return 'dashboard';
+  if (App.user.teacherCode) return 'me';
+  if (can('edit_timetable')) return 'lessons';
+  return 'me';
+}
+function routeAllowed(r) {
+  if (!r) return false;
+  if (r.allow) return r.allow();
+  return !r.perm || [].concat(r.perm).some(can);
+}
+
+/* ------------------------------- Khung giao diện ------------------------------- */
+var NAV = [
+  { group: 'Xem lịch', items: [
+    ['dashboard', '📊', 'Tổng quan'], ['teachers', '👩‍🏫', 'Lịch theo giáo viên'], ['schools', '🏫', 'Lịch theo trường'],
+    ['free', '🕒', 'Lịch trống GV'], ['conflicts', '⚠️', 'Cảnh báo trùng lịch'], ['me', '🙋', 'Lịch dạy của tôi'],
+  ] },
+  { group: 'Điều phối', items: [['lessons', '📅', 'Thời khóa biểu STEM'], ['auto', '🤖', 'Xếp lịch tự động'], ['data', '🗂️', 'Danh mục dữ liệu']] },
+  { group: 'Quản trị', items: [['users', '🔐', 'Người dùng & phân quyền'], ['settings', '⚙️', 'Cấu hình xếp lịch'], ['audit', '📝', 'Nhật ký thao tác']] },
+];
+
+function renderShell() {
+  var u = App.user;
+  var nav = NAV.map(function (g) {
+    var items = g.items.filter(function (it) { return routeAllowed(ROUTES[it[0]]); });
+    if (!items.length) return '';
+    return '<div class="group">' + esc(g.group) + '</div>' + items.map(function (it) {
+      return '<a href="#" data-route="' + it[0] + '" id="nav-' + it[0] + '"><span class="ico">' + it[1] + '</span>' + esc(it[2]) +
+        (it[0] === 'conflicts' ? '<span class="count" style="display:none"></span>' : '') + '</a>';
+    }).join('');
+  }).join('');
+  $('#app').innerHTML =
+    '<header class="topbar"><button class="menu-toggle" id="menu-toggle" aria-label="Menu">☰</button>' +
+    '<div class="brand"><span class="logo">K</span><span>KDI Scheduler</span></div><div class="spacer"></div>' +
+    '<div class="who"><div>' + esc(u.name || u.email) + '</div><small>' + esc(u.email) + ' · ' + esc(u.roleLabel) + '</small></div>' +
+    (u.via === 'otp' ? '<button class="btn sm btn-ghost" id="logout">Đăng xuất</button>' : '') + '</header>' +
+    '<div class="layout"><nav class="sidebar">' + nav + '<div class="group">Phiên bản ' + esc(App.boot.app.version) + '</div></nav>' +
+    '<main class="main" id="main"></main></div>';
+  $$('.sidebar a[data-route]').forEach(function (a) {
+    a.onclick = function (e) { e.preventDefault(); navigate(a.getAttribute('data-route')); };
+  });
+  $('#menu-toggle').onclick = function () { document.body.classList.toggle('nav-open'); };
+  var lo = $('#logout');
+  if (lo) lo.onclick = function () { call('auth.logout').catch(function () {}); setToken(''); location.reload(); };
+}
+
+function renderRoute() {
+  var name = App.route.name;
+  if (!routeAllowed(ROUTES[name])) { name = defaultRoute(); App.route = { name: name, param: '' }; }
+  var r = ROUTES[name];
+  $$('.sidebar a').forEach(function (a) { a.classList.toggle('active', a.getAttribute('data-route') === name); });
+  var main = $('#main');
+  main.innerHTML = spinner();
+  document.title = r.title + ' – KDI Scheduler';
+  var token = App.renderToken = (App.renderToken || 0) + 1;
+  Promise.resolve().then(function () { return r.render(main, App.route.param, function () { return token === App.renderToken; }); })
+    .catch(function (e) { if (token === App.renderToken) main.innerHTML = '<div class="alert err">' + esc(e.message || e) + '</div>'; });
+}
+
+/* ---------------------------- Đăng nhập ---------------------------- */
+function renderLogin(me) {
+  var msg = me && me.message && me.status !== 'anonymous' ? '<div class="alert ' + (me.status === 'pending' ? 'info' : 'err') + '">' + esc(me.message) + '</div>' : '';
+  $('#app').innerHTML = '<div class="login-wrap"><div class="login">' +
+    '<h1>KDI Scheduler</h1><div class="muted">Hệ thống xếp lịch giáo viên STEM – KDI Education</div>' + msg +
+    '<div class="stack" id="step1"><div class="field"><label>Email nội bộ KDI</label><input type="email" id="login-email" placeholder="ten.ho@kdi.edu.vn" autocomplete="email"></div>' +
+    '<button class="btn primary" id="send-code">Gửi mã đăng nhập</button>' +
+    '<div class="hint muted" style="font-size:12.5px">Hệ thống chỉ chấp nhận email <b>@kdi.edu.vn</b>. Nếu bạn đang đăng nhập Google bằng tài khoản KDI, hãy mở ứng dụng bằng tài khoản đó để vào thẳng không cần mã.</div></div>' +
+    '<div class="stack" id="step2" style="display:none"><div class="alert info" id="sent-msg"></div><div class="field"><label>Mã 6 số</label><input type="text" id="login-code" inputmode="numeric" maxlength="6" placeholder="••••••"></div>' +
+    '<button class="btn primary" id="verify-code">Đăng nhập</button><button class="btn-link" id="back">← Đổi email</button></div>' +
+    '</div></div>';
+  var email = $('#login-email');
+  email.focus();
+  $('#send-code').onclick = function () {
+    var v = email.value.trim();
+    if (!/@kdi\.edu\.vn$/i.test(v)) { toast('Vui lòng dùng email @kdi.edu.vn', 'err'); return; }
+    busy(this, call('auth.requestCode', { email: v })).then(function (r) {
+      $('#step1').style.display = 'none';
+      $('#step2').style.display = '';
+      $('#sent-msg').innerHTML = 'Đã gửi mã đến <b>' + esc(r.email) + '</b>. Mã có hiệu lực 10 phút.' + (r.devCode ? '<br>(Chế độ thử nghiệm – mã: <b>' + esc(r.devCode) + '</b>)' : '');
+      $('#login-code').focus();
+    }).catch(showError);
+  };
+  email.onkeydown = function (e) { if (e.key === 'Enter') $('#send-code').click(); };
+  $('#login-code').onkeydown = function (e) { if (e.key === 'Enter') $('#verify-code').click(); };
+  $('#back').onclick = function () { $('#step1').style.display = ''; $('#step2').style.display = 'none'; };
+  $('#verify-code').onclick = function () {
+    busy(this, call('auth.verifyCode', { email: email.value.trim(), code: $('#login-code').value.trim() })).then(function (r) {
+      setToken(r.token);
+      start();
+    }).catch(showError);
+  };
+}
+function onAuthLost(message) {
+  if (App.authLost) return;
+  App.authLost = true;
+  setToken('');
+  renderLogin({ status: 'expired', message: message || 'Phiên đăng nhập đã hết hạn.' });
+}
+
+/* ------------------------------ Khởi động ------------------------------ */
+function start() {
+  App.authLost = false;
+  call('auth.me').then(function (me) {
+    if (me.status !== 'ok') { renderLogin(me); return null; }
+    return call('bootstrap').then(function (boot) {
+      App.boot = boot;
+      App.user = boot.user;
+      renderShell();
+      initRouter();
+      refreshBadge();
+    });
+  }).catch(function (e) {
+    $('#app').innerHTML = '<div class="login-wrap"><div class="login"><h1>KDI Scheduler</h1><div class="alert err">' + esc(e.message) + '</div>' +
+      '<button class="btn" onclick="location.reload()">Thử lại</button></div></div>';
+  });
+}
+function initRouter() {
+  if (hasGasHistory()) {
+    google.script.history.setChangeHandler(function (e) {
+      var r = parseHash(e.location && e.location.hash);
+      App.route = r;
+      renderRoute();
+    });
+    google.script.url.getLocation(function (loc) {
+      App.route = parseHash(loc && loc.hash);
+      renderRoute();
+    });
+  } else {
+    window.onpopstate = function () { App.route = parseHash(location.hash); renderRoute(); };
+    App.route = parseHash(location.hash);
+    renderRoute();
+  }
+}
+
+/* ===================== Thành phần: lưới lịch tuần ===================== */
+function layoutLanes(events) {
+  events.sort(function (a, b) { return a.start - b.start || b.end - a.end; });
+  var cluster = [], clusterEnd = -1;
+  function flush() {
+    var lanes = [];
+    cluster.forEach(function (ev) {
+      var i = -1;
+      for (var k = 0; k < lanes.length; k++) if (lanes[k] <= ev.start) { i = k; break; }
+      if (i < 0) { i = lanes.length; lanes.push(ev.end); } else lanes[i] = ev.end;
+      ev.lane = i;
+    });
+    cluster.forEach(function (ev) { ev.lanes = lanes.length; });
+    cluster = [];
+  }
+  events.forEach(function (ev) {
+    if (cluster.length && ev.start >= clusterEnd) flush();
+    if (!cluster.length) clusterEnd = ev.end; else clusterEnd = Math.max(clusterEnd, ev.end);
+    cluster.push(ev);
+  });
+  if (cluster.length) flush();
+  return events;
+}
+
+/**
+ * Lưới lịch tuần. mode = 'teacher' (hiện trường) | 'school' (hiện GV).
+ * opts.busy: [{weekday, start, end, reason}] – lịch bận.
+ */
+function weekGrid(lessons, opts) {
+  opts = opts || {};
+  var S = App.boot.settings;
+  var dayStart = toMin(S.day_start) || 420;
+  var dayEnd = toMin(S.day_end) || 1050;
+  lessons.forEach(function (l) {
+    if (l.start === null || l.end === null || l.weekday < 0) return;
+    dayStart = Math.min(dayStart, Math.floor(l.start / 60) * 60);
+    dayEnd = Math.max(dayEnd, Math.ceil(l.end / 60) * 60);
+  });
+  var days = [0, 1, 2, 3, 4, 5];
+  if (lessons.some(function (l) { return l.weekday === 6; })) days.push(6);
+  var ppm = opts.ppm || 1.0;
+  var height = Math.round((dayEnd - dayStart) * ppm);
+  var html = '<div class="week-wrap"><div class="week" style="grid-template-columns:52px repeat(' + days.length + ',minmax(120px,1fr))">';
+  html += '<div class="col-head"></div>';
+  days.forEach(function (d) {
+    var ls = lessons.filter(function (l) { return l.weekday === d; });
+    var hrs = ls.reduce(function (s, l) { return s + (l.load || 0); }, 0);
+    html += '<div class="col-head">' + esc(weekdayName(d)) + '<small>' + (ls.length ? ls.length + ' tiết · ' + fmtH(hrs) : '–') + '</small></div>';
+  });
+  html += '<div class="axis" style="height:' + height + 'px">';
+  for (var h = Math.ceil(dayStart / 60) * 60; h <= dayEnd; h += 60) html += '<span style="top:' + ((h - dayStart) * ppm) + 'px">' + fmtMin(h) + '</span>';
+  html += '</div>';
+  days.forEach(function (d) {
+    html += '<div class="day" style="height:' + height + 'px">';
+    for (var h2 = Math.ceil(dayStart / 60) * 60; h2 <= dayEnd; h2 += 60) html += '<div class="hline" style="top:' + ((h2 - dayStart) * ppm) + 'px"></div>';
+    var evs = lessons.filter(function (l) { return l.weekday === d && l.start !== null; }).map(function (l) { return { start: l.start, end: l.end, l: l }; });
+    (opts.busy || []).filter(function (b) { return b.weekday === d; }).forEach(function (b) { evs.push({ start: b.start, end: b.end, busy: b }); });
+    layoutLanes(evs).forEach(function (ev) {
+      var top = (ev.start - dayStart) * ppm;
+      var hgt = Math.max((ev.end - ev.start) * ppm - 2, 16);
+      var style = 'top:' + top + 'px;height:' + hgt + 'px;left:calc(' + (ev.lane / ev.lanes * 100) + '% + 2px);width:calc(' + (100 / ev.lanes) + '% - 4px);';
+      if (ev.busy) {
+        html += '<div class="ev busy" style="' + style + '" title="Lịch bận ' + esc(ev.busy.startText + '–' + ev.busy.endText + ' ' + (ev.busy.reason || '')) + '"><b>' + esc(ev.busy.startText) + '–' + esc(ev.busy.endText) + '</b>Bận' + (ev.busy.reason ? ': ' + esc(ev.busy.reason) : '') + '</div>';
+        return;
+      }
+      var l = ev.l;
+      var cls = 'ev' + (l.teacher ? '' : (opts.mode === 'school' ? ' unassigned' : '')) + (l.conflict ? ' ' + l.conflict : '');
+      var primary = opts.mode === 'school' ? (l.teacher ? l.teacherName : 'Chưa xếp GV') : l.schoolName;
+      var title = l.weekdayLabel + ' ' + l.startText + '–' + l.endText + '\n' + l.schoolName + (l.className ? ' · Lớp ' + l.className : '') + '\n' + l.subjectName + '\nGV: ' + (l.teacherName || 'chưa xếp');
+      html += '<div class="' + cls + '" data-lesson="' + esc(l.id) + '" style="' + style + 'border-left-color:' + esc(l.color || subjectColor(l.subject)) + '" title="' + esc(title) + '">' +
+        (l.locked ? '<span class="lock">📌</span>' : '') +
+        '<b>' + esc(l.startText) + '–' + esc(l.endText) + '</b>' + esc(primary) +
+        '<div class="t2">' + esc((l.className ? l.className + ' · ' : '') + l.subjectName) + '</div></div>';
+    });
+    html += '</div>';
+  });
+  html += '</div></div>';
+  return html;
+}
+
+/** Bảng danh sách tiết (dạng in / điện thoại). */
+function lessonTable(lessons, mode) {
+  if (!lessons.length) return '<div class="empty">Chưa có tiết dạy nào.</div>';
+  return '<div class="table-wrap"><table class="tbl"><thead><tr><th>Thứ</th><th>Giờ</th>' + (mode === 'school' ? '<th>Giáo viên</th>' : '<th>Trường</th>') +
+    '<th>Lớp</th><th>Môn</th><th>Phòng</th><th></th></tr></thead><tbody>' +
+    lessons.map(function (l) {
+      return '<tr class="clickable" data-lesson="' + esc(l.id) + '"><td class="nowrap">' + esc(l.weekdayLabel) + '</td><td class="nowrap">' + esc(l.startText) + '–' + esc(l.endText) + '</td>' +
+        '<td>' + (mode === 'school' ? (l.teacher ? esc(l.teacherName) : '<span class="badge warn">Chưa xếp GV</span>') : esc(l.schoolName)) + '</td>' +
+        '<td>' + esc(l.className) + '</td><td><span class="chip"><span class="dot" style="background:' + esc(l.color || subjectColor(l.subject)) + '"></span>' + esc(l.subjectName) + '</span></td>' +
+        '<td>' + esc(l.room) + '</td><td>' + lessonFlags(l) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+function lessonFlags(l) {
+  var out = '';
+  if (l.invalid) out += '<span class="badge err" title="' + esc(l.invalid) + '">Dữ liệu lỗi</span> ';
+  if (l.conflict === 'error') out += '<span class="badge err">Trùng lịch</span> ';
+  else if (l.conflict === 'warning') out += '<span class="badge warn">Cảnh báo</span> ';
+  if (l.locked) out += '<span class="badge primary">📌 Ghim</span> ';
+  if (!l.teacher && !l.invalid) out += '<span class="badge warn">Chưa xếp</span>';
+  return out;
+}
+function bindLessonClicks(root, lessons, onChange) {
+  var byId = {};
+  lessons.forEach(function (l) { byId[l.id] = l; });
+  $$('[data-lesson]', root).forEach(function (el) {
+    el.onclick = function () { var l = byId[el.getAttribute('data-lesson')]; if (l) openLesson(l, onChange); };
+  });
+}
+
+/* ===================== Hộp thoại chi tiết tiết dạy ===================== */
+function openLesson(l, onChange) {
+  var rows = [
+    ['Trường', esc(l.schoolName) + ' <small>(' + esc(l.school) + ')</small>'],
+    ['Thời gian', esc(l.weekdayLabel + ' · ' + l.startText + '–' + l.endText) + ' <small>(' + fmtH(l.load) + ')</small>'],
+    ['Lớp / Khối', esc(l.className || '–') + ' / ' + esc(l.grade || '–')],
+    ['Môn', esc(l.subjectName) + ' · ' + esc(l.periods) + ' tiết' + (l.room ? ' · Phòng ' + esc(l.room) : '')],
+    ['Giáo viên', l.teacher ? '<a href="#" data-goto-teacher="' + esc(l.teacher) + '">' + esc(l.teacherName) + '</a> <small>(' + esc(l.teacher) + ')</small>' : '<span class="badge warn">Chưa xếp</span>'],
+    ['Trạng thái', lessonFlags(l) + (l.source ? ' <small>Nguồn: ' + esc(l.source) + '</small>' : '')],
+  ];
+  if (l.explain) rows.push(['Giải thích', '<div class="explain">' + esc(l.explain) + '</div>']);
+  if (l.notes) rows.push(['Ghi chú', esc(l.notes)]);
+  if (l.invalid) rows.push(['Lỗi dữ liệu', '<span class="badge err">' + esc(l.invalid) + '</span>']);
+  var body = '<table class="tbl" style="margin-bottom:12px">' + rows.map(function (r) { return '<tr><th style="width:120px">' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>';
+  if (can('assign') && !l.invalid) {
+    body += '<h3>Chọn / đổi giáo viên <small class="muted">– xếp hạng theo đúng thứ tự ưu tiên của hệ thống</small></h3>' +
+      '<div class="filters"><input type="search" id="cand-q" placeholder="Tìm GV…"><label class="check"><input type="checkbox" id="cand-ok" checked> Chỉ GV phù hợp</label></div><div id="cands">' + spinner('Đang tính toán…') + '</div>';
+  }
+  var foot = '';
+  if (can('assign') && !l.invalid) {
+    foot += '<button class="btn" data-act="lock">' + (l.locked ? 'Bỏ ghim' : '📌 Ghim (không cho tự động đổi)') + '</button>';
+    if (l.teacher) foot += '<button class="btn" data-act="unassign">Bỏ gán GV</button>';
+  }
+  if (can('edit_timetable')) foot += '<button class="btn" data-act="edit">Sửa tiết</button><button class="btn danger" data-act="delete">Xóa</button>';
+  foot += '<button class="btn" data-close>Đóng</button>';
+  var m = modal({ title: 'Tiết ' + l.id, body: body, footer: foot, wide: can('assign') });
+  function changed(msg, warnings) {
+    invalidate();
+    m.close();
+    if (warnings && warnings.length) {
+      modal({ title: 'Đã lưu – có cảnh báo cần xem', body: warnings.map(function (w) { return '<div class="alert ' + (w.severity === 'error' ? 'err' : 'warn') + '"><b>' + esc(w.label) + ':</b> ' + esc(w.message) + '</div>'; }).join('') });
+    } else if (msg) toast(msg, 'ok');
+    if (onChange) onChange();
+  }
+  $$('[data-goto-teacher]', m.el).forEach(function (a) { a.onclick = function (e) { e.preventDefault(); m.close(); navigate('teachers', a.getAttribute('data-goto-teacher')); }; });
+  var act = function (name) { return $('[data-act="' + name + '"]', m.el); };
+  if (act('lock')) act('lock').onclick = function () {
+    busy(this, call('lessons.lock', { ids: [l.id], locked: !l.locked })).then(function () { changed(l.locked ? 'Đã bỏ ghim' : 'Đã ghim tiết'); }).catch(showError);
+  };
+  if (act('unassign')) act('unassign').onclick = function () {
+    busy(this, call('lessons.assign', { id: l.id, teacher: '' })).then(function () { changed('Đã bỏ gán GV'); }).catch(showError);
+  };
+  if (act('edit')) act('edit').onclick = function () { m.close(); lessonForm(l, null, onChange); };
+  if (act('delete')) act('delete').onclick = function () {
+    confirmBox('Xóa tiết ' + l.id + ' (' + l.schoolName + ', ' + l.weekdayLabel + ' ' + l.startText + ')?', 'Xóa', true).then(function (ok) {
+      if (!ok) return;
+      call('lessons.delete', { ids: [l.id] }).then(function () { changed('Đã xóa tiết'); }).catch(showError);
+    });
+  };
+  if (can('assign') && !l.invalid) {
+    call('lessons.candidates', { id: l.id }).then(function (res) {
+      var all = res.candidates;
+      function draw() {
+        var q = $('#cand-q', m.el).value;
+        var onlyOk = $('#cand-ok', m.el).checked;
+        var list = all.filter(function (c) { return (!onlyOk || c.feasible || c.current) && matches(q, [c.teacher, c.name]); }).slice(0, 60);
+        $('#cands', m.el).innerHTML = !list.length ? '<div class="empty">Không có GV phù hợp. Bỏ chọn "Chỉ GV phù hợp" để xem lý do.</div>' :
+          '<div class="table-wrap"><table class="tbl"><thead><tr><th>#</th><th>Giáo viên</th><th class="num">Điểm</th><th class="num">Khoảng cách</th><th>Giờ dạy</th><th class="num">Số trường</th><th>Ghi chú</th><th></th></tr></thead><tbody>' +
+          list.map(function (c, i) {
+            var notes = (c.priority ? '<span class="badge primary">★ Ưu tiên</span> ' : '') + (c.trained ? '<span class="badge ok">Đã đào tạo</span> ' : '<span class="badge warn">Chưa đào tạo</span> ') +
+              (c.feasible ? '' : '<span class="badge err">' + esc(c.reason) + '</span>') + (c.current ? ' <span class="badge info">Đang dạy</span>' : '');
+            return '<tr><td>' + (i + 1) + '</td><td><b>' + esc(c.name) + '</b><br><small>' + esc(c.teacher + ' · ' + c.type + ' · Loại ' + c.rating) + '</small></td>' +
+              '<td class="num score" title="' + esc(c.explain) + '">' + fmtNum(c.score) + '</td>' +
+              '<td class="num">' + (c.distance === null || c.distance === undefined ? '?' : fmtNum(c.distance) + ' km') + (c.distanceSource === 'estimate' ? '<br><small>ước tính</small>' : '') + '</td>' +
+              '<td style="min-width:110px">' + loadBar(c.load, c.target, c.max) + '<small>' + fmtH(c.load) + ' / ' + fmtH(c.target) + '</small></td>' +
+              '<td class="num">' + c.schools + '</td><td>' + notes + '<div class="explain">' + esc(c.explain) + '</div></td>' +
+              '<td>' + (c.current ? '' : '<button class="btn sm ' + (c.feasible ? 'primary' : '') + '" data-pick="' + esc(c.teacher) + '">Chọn</button>') + '</td></tr>';
+          }).join('') + '</tbody></table></div>';
+        $$('[data-pick]', m.el).forEach(function (b) {
+          b.onclick = function () {
+            var code = b.getAttribute('data-pick');
+            var c = all.filter(function (x) { return x.teacher === code; })[0];
+            var go = c.feasible ? Promise.resolve(true) : confirmBox(c.name + ' không phù hợp: ' + c.reason + '.\nVẫn gán?', 'Vẫn gán', true);
+            go.then(function (ok) {
+              if (!ok) return;
+              busy(b, call('lessons.assign', { id: l.id, teacher: code })).then(function (r) { changed('Đã gán ' + c.name, r.warnings); }).catch(showError);
+            });
+          };
+        });
+      }
+      $('#cand-q', m.el).oninput = debounce(draw, 150);
+      $('#cand-ok', m.el).onchange = draw;
+      draw();
+    }).catch(function (e) { $('#cands', m.el).innerHTML = '<div class="alert err">' + esc(e.message) + '</div>'; });
+  }
+}
+
+/* ===================== Form thêm / sửa tiết ===================== */
+function optionList(items, selected, empty) {
+  return (empty !== undefined ? '<option value="">' + esc(empty) + '</option>' : '') + items.map(function (it) {
+    return '<option value="' + esc(it[0]) + '"' + (String(it[0]) === String(selected) ? ' selected' : '') + '>' + esc(it[1]) + '</option>';
+  }).join('');
+}
+function schoolOptions(sel, empty) {
+  return optionList(App.boot.lookups.schools.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'vi'); })
+    .map(function (s) { return [s.code, s.name + ' (' + s.code + ')' + (s.active ? '' : ' – ngừng')]; }), sel, empty);
+}
+function teacherOptions(sel, empty) {
+  return optionList(App.boot.lookups.teachers.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'vi'); })
+    .map(function (t) { return [t.code, t.name + ' (' + t.code + ')' + (t.active ? '' : ' – ngừng')]; }), sel, empty);
+}
+function subjectOptions(sel, empty) {
+  return optionList(App.boot.lookups.subjects.map(function (s) { return [s.code, s.name + ' (' + s.code + ')']; }), sel, empty);
+}
+function weekdayOptions(sel) {
+  return optionList(App.boot.weekdays.map(function (w) { return [w, w]; }), sel);
+}
+
+function lessonForm(l, defaults, onSaved) {
+  var d = l || defaults || {};
+  var body = '<div class="form">' +
+    '<div class="field full"><label>Trường *</label><select id="f-school">' + schoolOptions(d.school, '— Chọn trường —') + '</select></div>' +
+    '<div class="field"><label>Thứ *</label><select id="f-weekday">' + weekdayOptions(d.weekdayLabel || 'Thứ 2') + '</select></div>' +
+    '<div class="field"><label>Môn *</label><select id="f-subject">' + subjectOptions(d.subject, '— Chọn môn —') + '</select></div>' +
+    '<div class="field"><label>Bắt đầu *</label><input type="time" id="f-start" value="' + esc(d.startText || '') + '"></div>' +
+    '<div class="field"><label>Kết thúc *</label><input type="time" id="f-end" value="' + esc(d.endText || '') + '"></div>' +
+    '<div class="field"><label>Lớp</label><input type="text" id="f-class" value="' + esc(d.className || '') + '" placeholder="vd. 3A1"></div>' +
+    '<div class="field"><label>Khối</label><input type="text" id="f-grade" value="' + esc(d.grade || '') + '"></div>' +
+    '<div class="field"><label>Số tiết</label><input type="number" id="f-periods" min="0" step="0.5" value="' + esc(d.periods || 1) + '"></div>' +
+    '<div class="field"><label>Phòng</label><input type="text" id="f-room" value="' + esc(d.room || '') + '"></div>' +
+    (can('assign') ? '<div class="field"><label>Giáo viên</label><select id="f-teacher">' + teacherOptions(d.teacher, '— Chưa xếp —') + '</select><div class="hint">Mẹo: mở tiết sau khi lưu để xem gợi ý GV phù hợp nhất.</div></div>' +
+      '<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" id="f-locked"' + (d.locked ? ' checked' : '') + '> 📌 Ghim – không cho xếp tự động thay đổi</label></div>' : '') +
+    '<div class="field full"><label>Ghi chú</label><input type="text" id="f-notes" value="' + esc(d.notes || '') + '"></div></div>';
+  var m = modal({ title: l ? 'Sửa tiết ' + l.id : 'Thêm tiết vào TKB', body: body, footer: '<button class="btn" data-close>Hủy</button><button class="btn primary" id="f-save">Lưu</button>' });
+  $('#f-save', m.el).onclick = function () {
+    var lesson = {
+      id: l ? l.id : '', school: $('#f-school', m.el).value, weekday: $('#f-weekday', m.el).value, subject: $('#f-subject', m.el).value,
+      start: $('#f-start', m.el).value, end: $('#f-end', m.el).value, className: $('#f-class', m.el).value, grade: $('#f-grade', m.el).value,
+      periods: $('#f-periods', m.el).value, room: $('#f-room', m.el).value, notes: $('#f-notes', m.el).value,
+    };
+    if (can('assign')) { lesson.teacher = $('#f-teacher', m.el).value; lesson.locked = $('#f-locked', m.el).checked; }
+    busy(this, call('lessons.save', { lesson: lesson })).then(function (r) {
+      invalidate();
+      m.close();
+      if (r.warnings && r.warnings.length) {
+        modal({ title: 'Đã lưu – có cảnh báo', body: r.warnings.map(function (w) { return '<div class="alert ' + (w.severity === 'error' ? 'err' : 'warn') + '"><b>' + esc(w.label) + ':</b> ' + esc(w.message) + '</div>'; }).join('') });
+      } else toast('Đã lưu tiết ' + r.id, 'ok');
+      if (onSaved) onSaved();
+    }).catch(showError);
+  };
+}
+
+/* ===================== Nhập TKB bằng cách dán từ Excel ===================== */
+var PASTE_COLS = [['weekday', 'Thứ'], ['start', 'Bắt đầu'], ['end', 'Kết thúc'], ['className', 'Lớp'], ['grade', 'Khối'], ['subject', 'Môn (mã hoặc tên)'], ['periods', 'Số tiết'], ['room', 'Phòng'], ['notes', 'Ghi chú']];
+function pasteImport(defaultSchool, onDone) {
+  var sample = 'Thứ 2\t07:30\t08:05\t1A1\t1\tRB\t1\tSTEM 1\nThứ 2\t08:15\t08:50\t1A2\t1\tRB\t1\tSTEM 1\nThứ 4\t14:00\t14:35\t3A1\t3\tLập trình Scratch\t1\tSTEM 1';
+  var body = '<div class="alert info">Sao chép các dòng TKB từ Excel/Google Sheets rồi dán vào ô dưới. Thứ tự cột: <b>' +
+    PASTE_COLS.map(function (c) { return c[1]; }).join(' | ') + '</b>. Có thể bật "Cột đầu là Mã trường" để nhập nhiều trường một lần.</div>' +
+    '<div class="form"><div class="field"><label>Trường</label><select id="p-school">' + schoolOptions(defaultSchool, '— Cột đầu là Mã trường —') + '</select></div>' +
+    '<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" id="p-replace"> Thay thế toàn bộ TKB hiện có của trường này</label></div>' +
+    '<div class="field full"><label>Dữ liệu dán từ Excel</label><textarea id="p-text" placeholder="' + esc(sample) + '"></textarea>' +
+    '<div class="hint"><button class="btn-link" id="p-sample">Điền dữ liệu ví dụ</button></div></div></div><div id="p-preview"></div>';
+  var m = modal({ title: 'Nhập TKB từ Excel (dán)', body: body, wide: true, footer: '<button class="btn" data-close>Hủy</button><button class="btn primary" id="p-save" disabled>Nhập dữ liệu</button>' });
+  var parsed = [];
+  function parse() {
+    var school = $('#p-school', m.el).value;
+    var lines = $('#p-text', m.el).value.split(/\r?\n/).filter(function (x) { return x.trim(); });
+    parsed = lines.map(function (line) {
+      var cells = line.split('\t').map(function (c) { return c.trim(); });
+      var r = {};
+      if (!school) r.school = cells.shift();
+      PASTE_COLS.forEach(function (c, i) { r[c[0]] = cells[i] || ''; });
+      return r;
+    }).filter(function (r) { return !/^th(ứ|u)$/i.test(r.weekday); });
+    $('#p-save', m.el).disabled = !parsed.length;
+    $('#p-preview', m.el).innerHTML = !parsed.length ? '' : '<h3>Xem trước (' + parsed.length + ' dòng)</h3><div class="table-wrap" style="max-height:260px;overflow:auto"><table class="tbl"><thead><tr>' +
+      (school ? '' : '<th>Mã trường</th>') + PASTE_COLS.map(function (c) { return '<th>' + esc(c[1]) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      parsed.map(function (r) {
+        var bad = !r.weekday || !toMin(r.start) || !toMin(r.end) || !r.subject;
+        return '<tr class="' + (bad ? 'row-err' : '') + '">' + (school ? '' : '<td>' + esc(r.school) + '</td>') + PASTE_COLS.map(function (c) { return '<td>' + esc(r[c[0]]) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  $('#p-text', m.el).oninput = debounce(parse, 200);
+  $('#p-school', m.el).onchange = parse;
+  $('#p-sample', m.el).onclick = function () { $('#p-text', m.el).value = sample; parse(); };
+  $('#p-save', m.el).onclick = function () {
+    var school = $('#p-school', m.el).value;
+    var replace = $('#p-replace', m.el).checked;
+    var btn = this;
+    var go = replace && school ? confirmBox('Xóa toàn bộ TKB hiện có của trường ' + school + ' và thay bằng ' + parsed.length + ' dòng mới?', 'Thay thế', true) : Promise.resolve(true);
+    go.then(function (ok) {
+      if (!ok) return;
+      busy(btn, call('lessons.bulkAdd', { school: school, rows: parsed, replaceSchool: replace && !!school })).then(function (r) {
+        if (r.errors.length && !r.added) {
+          $('#p-preview', m.el).insertAdjacentHTML('afterbegin', '<div class="alert err"><b>Chưa nhập – có ' + r.errors.length + ' dòng lỗi:</b><br>' + r.errors.map(esc).join('<br>') + '</div>');
+          return;
+        }
+        invalidate();
+        m.close();
+        toast('Đã nhập ' + r.added + ' tiết' + (r.removed ? ', xóa ' + r.removed + ' tiết cũ' : ''), 'ok');
+        if (onDone) onDone();
+      }).catch(showError);
+    });
+  };
+}
+</script>

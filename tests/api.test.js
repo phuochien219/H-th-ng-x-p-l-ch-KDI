@@ -122,7 +122,7 @@ test('nhập TKB hàng loạt (dán từ Excel) và thay thế TKB cũ của tr�
   assert.ok(before > 0);
   const rows = [
     { weekday: 'Thứ 2', start: '07:30', end: '08:05', className: '1A1', grade: '1', subject: 'RB' },
-    { weekday: 'thứ hai', start: '08:15', end: '08:50', className: '1A2', grade: '1', subject: 'SCR' },
+    { weekday: 'thứ hai', start: '08:15', end: '08:50', className: '1A2', grade: '1', subject: 'scratch' },
     { weekday: 'Thứ 8', start: '08:15', end: '08:50', className: '1A3', grade: '1', subject: 'SCR' },
   ];
   const strict = call('sale@kdi.edu.vn', 'lessons.bulkAdd', { school: 'TR002', rows, replaceSchool: true });
@@ -132,7 +132,12 @@ test('nhập TKB hàng loạt (dán từ Excel) và thay thế TKB cũ của tr�
   const ok = call('sale@kdi.edu.vn', 'lessons.bulkAdd', { school: 'TR002', rows: rows.slice(0, 2), replaceSchool: true });
   assert.equal(ok.data.added, 2);
   assert.equal(ok.data.removed, before);
-  assert.equal(call('sale@kdi.edu.vn', 'lessons.list').data.filter((l) => l.school === 'TR002').length, 2);
+  const tr2 = call('sale@kdi.edu.vn', 'lessons.list').data.filter((l) => l.school === 'TR002');
+  assert.equal(tr2.length, 2);
+  assert.ok(tr2.some((l) => l.subject === 'SCR'), 'nhận diện tên môn rút gọn "scratch"');
+  // Tên môn mơ hồ (khớp nhiều môn) bị từ chối.
+  const amb = call('sale@kdi.edu.vn', 'lessons.bulkAdd', { school: 'TR002', rows: [{ weekday: 'Thứ 3', start: '08:00', end: '08:40', subject: 'a' }] });
+  assert.equal(amb.data.added, 0);
 });
 
 test('xếp lịch tự động: xem trước → áp dụng → hoàn tác', () => {
