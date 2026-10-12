@@ -154,13 +154,21 @@ var Db = (function () {
     var entry = prepare_(table);
     var rows = objs.map(function (o) { return buildRow_(table, entry, o, null); });
     var sh = entry.sheet;
-    var start = Math.max(sh.getLastRow(), 1) + 1;
+    // Dòng trống cuối cùng thực sự (bỏ qua ô chỉ chứa FALSE của checkbox).
+    var lastData = 1;
+    for (var r = entry.grid.length - 1; r >= 1; r--) {
+      if (!isBlankRow_(entry.grid[r])) { lastData = r + 1; break; }
+    }
+    var start = lastData + 1;
     var lastNeeded = start + rows.length - 1;
     if (lastNeeded > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), lastNeeded - sh.getMaxRows());
     def(table).columns.forEach(function (c) {
       if (TEXT_COLUMNS[c.type] && entry.col[c.key] >= 0) sh.getRange(start, entry.col[c.key] + 1, rows.length, 1).setNumberFormat('@');
     });
     sh.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
+    def(table).columns.forEach(function (c) {
+      if (c.type === 'bool' && entry.col[c.key] >= 0) sh.getRange(start, entry.col[c.key] + 1, rows.length, 1).insertCheckboxes();
+    });
     delete cache[table];
   }
 
@@ -225,7 +233,11 @@ var Db = (function () {
   function replaceAll(table, objs) {
     var sh = sheet(table, true);
     var lastRow = sh.getLastRow();
-    if (lastRow > 1) sh.getRange(2, 1, lastRow - 1, Math.max(sh.getLastColumn(), 1)).clearContent();
+    if (lastRow > 1) {
+      // Xóa hẳn các dòng (xóa nội dung thì ô checkbox vẫn còn giá trị FALSE).
+      if (sh.getMaxRows() - (lastRow - 1) <= 1) sh.insertRowsAfter(sh.getMaxRows(), 1);
+      sh.deleteRows(2, lastRow - 1);
+    }
     delete cache[table];
     append(table, objs);
   }
@@ -263,7 +275,7 @@ var Db = (function () {
 })();
 
 /** Đọc cấu hình (sheet CauHinh) + giá trị mặc định. */
-function getSettings() {
+function getSettings_() {
   var out = {};
   SETTINGS_SPEC.forEach(function (s) { out[s.key] = s.def; });
   var rows = [];
@@ -295,7 +307,7 @@ function coerceSetting_(spec, v) {
   return String(v);
 }
 
-function saveSettings(values) {
+function saveSettings_(values) {
   var rows = Db.read('settings');
   var byKey = {};
   rows.forEach(function (r) { byKey[r.key] = r; });

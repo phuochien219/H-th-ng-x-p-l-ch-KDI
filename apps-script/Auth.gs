@@ -89,7 +89,7 @@ function createUserOnFirstLogin_(email) {
     var role;
     if (isSuperAdmin(email)) role = 'admin';
     else if (findTeacherByEmail_(email)) role = 'teacher';
-    else role = getSettings().new_user_role || 'viewer';
+    else role = getSettings_().new_user_role || 'viewer';
     var teacher = findTeacherByEmail_(email);
     var user = { email: email, name: teacher ? teacher.name : '', role: role, active: true, addedBy: 'Tự đăng ký', createdAt: nowString(), lastLogin: nowString() };
     Db.append('users', [user]);

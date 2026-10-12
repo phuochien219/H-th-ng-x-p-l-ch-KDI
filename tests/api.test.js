@@ -336,3 +336,33 @@ test('xóa nhiều tiết và giữ đúng cấu trúc sheet', () => {
   ctx.Db.clearCache();
   assert.equal(ctx.Db.read('lessons').length, left.length);
 });
+
+test('hàm menu gọi được từ client vẫn bị kiểm tra quyền', () => {
+  const { ctx, env } = fresh();
+  env.setUser('viewer@kdi.edu.vn');
+  ctx.Db.clearCache();
+  assert.throws(() => ctx.setupSheets(), /không có quyền/);
+  env.setUser('');
+  ctx.Db.clearCache();
+  assert.throws(() => ctx.setupSheets(), /không có quyền/);
+  env.setUser(SUPER);
+  ctx.Db.clearCache();
+  assert.equal(ctx.setupSheets(), true);
+  // Các hàm đọc/ghi cấu hình không còn là hàm công khai.
+  assert.equal(typeof ctx.saveSettings, 'undefined');
+  assert.equal(typeof ctx.getSettings, 'undefined');
+});
+
+test('dòng checkbox FALSE thừa không làm lệch vị trí thêm dòng', () => {
+  const { ctx, call } = fresh();
+  const sh = ctx.Db.sheet('lessons', false);
+  const before = ctx.Db.read('lessons').length;
+  // Người dùng chèn checkbox cho cả cột "Ghim" trên Sheets.
+  sh.getRange(2, 12, sh.getMaxRows() - 1, 1).insertCheckboxes();
+  const add = call('sale@kdi.edu.vn', 'lessons.save', { lesson: { school: 'TR001', weekday: 'Thứ 6', start: '16:00', end: '16:40', subject: 'RB' } });
+  assert.equal(add.ok, true, add.error);
+  ctx.Db.clearCache();
+  const rows = ctx.Db.read('lessons');
+  assert.equal(rows.length, before + 1);
+  assert.equal(rows[rows.length - 1]._row, before + 2, 'dòng mới nằm ngay sau dữ liệu');
+});

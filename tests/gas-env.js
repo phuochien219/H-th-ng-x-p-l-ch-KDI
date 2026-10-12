@@ -62,8 +62,17 @@ class FakeRange {
   getNumRows() { return this.nrows; }
 }
 // Định dạng: không làm gì nhưng trả về range để nối chuỗi như Apps Script.
+// Giống Sheets thật: chèn checkbox vào ô trống sẽ ghi giá trị FALSE.
+FakeRange.prototype.insertCheckboxes = function () {
+  for (let r = 0; r < this.nrows; r++) {
+    for (let c = 0; c < this.ncols; c++) {
+      if (this.sheet._get(this.row + r, this.col + c) === '') this.sheet._set(this.row + r, this.col + c, false);
+    }
+  }
+  return this;
+};
 ['setNumberFormat', 'setFontWeight', 'setBackground', 'setFontColor', 'setWrap', 'setVerticalAlignment',
-  'setHorizontalAlignment', 'setDataValidation', 'insertCheckboxes'].forEach((m) => {
+  'setHorizontalAlignment', 'setDataValidation'].forEach((m) => {
   FakeRange.prototype[m] = function () { return this; };
 });
 

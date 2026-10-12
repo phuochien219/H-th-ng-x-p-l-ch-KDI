@@ -75,7 +75,7 @@ function loadAll_() {
 }
 
 function context_() {
-  return buildContext(loadAll_(), getSettings());
+  return buildContext(loadAll_(), getSettings_());
 }
 
 function lessonDto_(ctx, l, cidx) {
@@ -666,7 +666,7 @@ function bootstrap_(args, user) {
     roles: ROLES, weekdays: WEEKDAYS, teacherTypes: TEACHER_TYPES, ratings: RATINGS, preferences: PREFERENCES,
     lookups: { schools: [], teachers: [], subjects: [], districts: [] },
   };
-  var s = getSettings();
+  var s = getSettings_();
   out.settings = { day_start: s.day_start, day_end: s.day_end, load_unit: s.load_unit, min_free_minutes: s.min_free_minutes };
   out.lookups.subjects = Db.read('subjects').map(function (x) { return { code: str(x.code).toUpperCase(), name: x.name, color: x.color }; });
   if (hasPerm(user, 'view_schedule') || hasPerm(user, 'edit_timetable')) {
@@ -757,14 +757,14 @@ var ACTIONS = {
   'users.delete': { perm: 'manage_users', fn: function (a, u) { return deleteUser_(u, a.email); } },
   'settings.get': {
     perm: 'manage_settings', fn: function () {
-      var values = getSettings();
+      var values = getSettings_();
       return SETTINGS_SPEC.map(function (s) { return Object.assign({}, s, { value: values[s.key] }); });
     },
   },
   'settings.save': {
     perm: 'manage_settings', fn: function (a, u) {
       return withLock_(function () {
-        saveSettings(a.values || {});
+        saveSettings_(a.values || {});
         audit_(u, 'Cập nhật cấu hình', 'CauHinh', a.values || {});
         return { ok: true };
       });

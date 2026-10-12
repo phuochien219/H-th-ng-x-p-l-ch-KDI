@@ -14,8 +14,26 @@ function onOpen() {
     .addToUi();
 }
 
+/**
+ * Các hàm gọi từ menu là hàm "công khai" nên client web cũng gọi được qua
+ * google.script.run → luôn kiểm tra quyền của người đang thao tác.
+ * Ngoại lệ: lần cài đặt đầu tiên (chưa có sheet NguoiDung).
+ */
+function requireSheetRole_(perm) {
+  if (!Db.sheet('users', false)) {
+    return { email: activeGoogleEmail_() || 'cài đặt', isSuperAdmin: true, role: 'admin', status: 'ok' };
+  }
+  var u = resolveUser_('');
+  if (u.status !== 'ok' || !hasPerm(u, perm)) {
+    throw new Error('Bạn không có quyền dùng chức năng này. Hãy đăng nhập Google bằng tài khoản @' + APP.ALLOWED_DOMAINS[0] +
+      ' có vai trò phù hợp (' + (u.email || 'chưa xác định email') + ').');
+  }
+  return u;
+}
+
 /** Tạo các sheet còn thiếu, tiêu đề, danh sách chọn, cấu hình mặc định, tài khoản admin gốc. */
 function setupSheets() {
+  requireSheetRole_('manage_settings');
   return withLock_(function () {
     Object.keys(TABLES).forEach(function (table) { Db.ensureHeaders(table); });
     applyValidations_();
@@ -61,23 +79,15 @@ function applyValidations_() {
       if (col < 1) return;
       var range = sh.getRange(2, col, maxRows, 1);
       var list = lists[d.sheet + '.' + c.key];
-      if (list) {
-        range.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(list, true).setAllowInvalid(true).build());
-      } else if (c.type === 'bool') {
-        range.insertCheckboxes();
-      }
+      // Ô checkbox (cột kiểu bool) được tạo khi thêm dòng (Db.append) – không chèn cho cả
+      // cột vì Sheets sẽ ghi FALSE vào mọi ô trống và làm sai vị trí dòng cuối.
+      if (list) range.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(list, true).setAllowInvalid(true).build());
     });
   });
 }
 
 function toast_(msg) {
   try { SpreadsheetApp.getActiveSpreadsheet().toast(msg, 'KDI Scheduler', 5); } catch (e) { /* chạy ngoài Sheets */ }
-}
-
-function menuUser_() {
-  var email = '';
-  try { email = Session.getActiveUser().getEmail(); } catch (e) { email = ''; }
-  return { email: email || 'menu', isSuperAdmin: isSuperAdmin(email), role: 'admin' };
 }
 
 function menuOpenWebApp() {
@@ -91,7 +101,7 @@ function menuOpenWebApp() {
 
 function menuAutoSchedule() {
   var ui = SpreadsheetApp.getUi();
-  var user = menuUser_();
+  var user = requireSheetRole_('auto_schedule');
   var run = runAuto_({ mode: 'fill' }, user);
   var s = run.stats;
   var msg = 'Xếp được ' + s.assigned + '/' + s.considered + ' tiết trống (giữ nguyên ' + s.kept + ' tiết đã có GV).\n' +
@@ -105,6 +115,8 @@ function menuAutoSchedule() {
 }
 
 function menuHighlightConflicts() {
+  var ui = SpreadsheetApp.getUi();
+  requireSheetRole_('auto_schedule');
   var ctx = context_();
   var conflicts = detectConflicts(ctx);
   var idx = conflictIndex(conflicts);
@@ -128,13 +140,14 @@ function menuHighlightConflicts() {
     sh.getRange(2, 1, lastRow - 1, lastCol).setBackgrounds(colors);
   }
   var errors = conflicts.filter(function (c) { return c.severity === 'error'; }).length;
-  SpreadsheetApp.getUi().alert('Kiểm tra trùng lịch',
+  ui.alert('Kiểm tra trùng lịch',
     'Lỗi (đỏ): ' + errors + '\nCảnh báo (vàng): ' + (conflicts.length - errors) + '\nTiết chưa có GV: tô xanh nhạt.\n\nXem chi tiết trong ứng dụng web → Cảnh báo.',
-    SpreadsheetApp.getUi().ButtonSet.OK);
+    ui.ButtonSet.OK);
 }
 
 function menuLoadDemoData() {
   var ui = SpreadsheetApp.getUi();
+  requireSheetRole_('manage_settings');
   if (ui.alert('Nạp dữ liệu mẫu', 'Thao tác này XÓA toàn bộ dữ liệu trường, GV, TKB hiện có và thay bằng dữ liệu mẫu. Tiếp tục?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   setupSheets();
   loadDemoData_();
