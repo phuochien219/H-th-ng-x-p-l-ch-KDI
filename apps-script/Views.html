@@ -809,6 +809,178 @@ function viewMe(main, param, isCurrent) {
   });
 }
 
+/* ========================= Nhập dữ liệu từ Excel ========================= */
+var SHEETJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+function loadSheetJs() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  return new Promise(function (resolve, reject) {
+    var sc = document.createElement('script');
+    sc.src = SHEETJS_URL;
+    sc.onload = function () { resolve(window.XLSX); };
+    sc.onerror = function () { reject(new Error('Không tải được thư viện đọc Excel – kiểm tra kết nối mạng.')); };
+    document.head.appendChild(sc);
+  });
+}
+function keyName(s) { return norm(s).replace(/[^a-z0-9]/g, ''); }
+
+/** Tạo file mẫu .xlsx ngay trên trình duyệt, luôn khớp với cấu trúc hiện tại của hệ thống. */
+function downloadTemplate(spec) {
+  return loadSheetJs().then(function (XLSX) {
+    var wb = XLSX.utils.book_new();
+    var guide = [['HƯỚNG DẪN NHẬP DỮ LIỆU – KDI SCHEDULER'], [''],
+      ['1. Mỗi sheet trong file tương ứng 1 bảng dữ liệu. Giữ nguyên TÊN SHEET và DÒNG TIÊU ĐỀ (dòng 1).'],
+      ['2. Các dòng màu xám/ví dụ có sẵn chỉ để tham khảo – hãy XÓA hoặc GHI ĐÈ bằng dữ liệu thật.'],
+      ['3. Sheet nào không cần nhập thì để trống (chỉ còn dòng tiêu đề) hoặc xóa sheet đó.'],
+      ['4. Thứ tự hệ thống nhập: ' + spec.map(function (t) { return t.sheet; }).join(' → ') + ' (để mã môn/trường/GV mới dùng được ngay ở các sheet sau).'],
+      ['5. Mã (mã môn, mã trường, mã GV) viết liền không dấu, vd. RB, TR001, GV001. Trùng mã đã có = cập nhật bản ghi đó.'],
+      ['6. Giờ ghi dạng 07:30; thứ ghi "Thứ 2" … "Thứ 7", "Chủ nhật"; số thập phân dùng dấu chấm hoặc phẩy.'],
+      ['7. Lưu file rồi vào web → "Nhập dữ liệu từ Excel" → chọn file → Kiểm tra → Nhập dữ liệu.'], [''],
+      ['Sheet', 'Cột', 'Bắt buộc', 'Cách ghi']];
+    spec.forEach(function (t) {
+      t.columns.forEach(function (c, i) { guide.push([i ? '' : t.sheet + ' – ' + t.label, c.header, c.required ? 'Có' : '', c.hint || '']); });
+    });
+    var gws = XLSX.utils.aoa_to_sheet(guide);
+    gws['!cols'] = [{ wch: 34 }, { wch: 22 }, { wch: 10 }, { wch: 70 }];
+    XLSX.utils.book_append_sheet(wb, gws, 'HuongDan');
+    spec.forEach(function (t) {
+      var ws = XLSX.utils.aoa_to_sheet([t.columns.map(function (c) { return c.header; })].concat(t.examples));
+      ws['!cols'] = t.columns.map(function (c) { return { wch: Math.max(12, Math.min(40, c.header.length + 6)) }; });
+      XLSX.utils.book_append_sheet(wb, ws, t.sheet);
+    });
+    XLSX.writeFile(wb, 'Mau_nhap_lieu_KDI.xlsx');
+  });
+}
+
+/** Đọc file → danh sách sheet đã nhận diện bảng & cột. */
+function parseWorkbook(XLSX, buf, spec) {
+  var wb = XLSX.read(buf, { type: 'array' });
+  var bySheet = {};
+  spec.forEach(function (t) { bySheet[keyName(t.sheet)] = t; bySheet[keyName(t.label)] = t; bySheet[t.table] = t; });
+  return wb.SheetNames.filter(function (n) { return keyName(n) !== 'huongdan'; }).map(function (name) {
+    var aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '', blankrows: true });
+    var t = bySheet[keyName(name)] || null;
+    return { name: name, aoa: aoa, table: t ? t.table : '' };
+  });
+}
+function rowsForTable(sheet, t) {
+  var header = (sheet.aoa[0] || []).map(function (h) { return String(h).trim(); });
+  var map = [];
+  var unknown = [];
+  header.forEach(function (h, i) {
+    if (!h) return;
+    var c = t.columns.filter(function (col) { return keyName(col.header) === keyName(h) || keyName(col.key) === keyName(h); })[0];
+    if (c) map.push([i, c.key]); else unknown.push(h);
+  });
+  var missing = t.columns.filter(function (c) { return c.required && !map.some(function (m) { return m[1] === c.key; }); }).map(function (c) { return c.header; });
+  var rows = [];
+  for (var r = 1; r < sheet.aoa.length; r++) {
+    var line = sheet.aoa[r] || [];
+    if (!line.some(function (v) { return String(v).trim() !== ''; })) continue;
+    var o = { _line: r + 1 };
+    map.forEach(function (m) { o[m[1]] = String(line[m[0]] === undefined ? '' : line[m[0]]).trim(); });
+    rows.push(o);
+  }
+  return { rows: rows, unknown: unknown, missing: missing };
+}
+
+function viewImport(main, param, isCurrent) {
+  return call('import.spec').then(function (spec) {
+    if (!isCurrent()) return;
+    var specBy = {};
+    spec.forEach(function (t) { specBy[t.table] = t; });
+    var sheets = [];
+    main.innerHTML = '<div class="page-head"><div><h1>Nhập dữ liệu từ Excel</h1><div class="muted">Điền dữ liệu vào file mẫu rồi tải lên một lần – hệ thống kiểm tra từng dòng trước khi ghi vào Google Sheets.</div></div></div>' +
+      '<div class="grid cols-2"><div class="card"><h2>Bước 1 · Tải file mẫu</h2><p>File mẫu gồm các sheet bạn được phép nhập: <b>' + spec.map(function (t) { return esc(t.label); }).join(', ') + '</b>, kèm sheet <b>HuongDan</b> giải thích từng cột và dòng ví dụ.</p>' +
+      '<button class="btn primary" id="im-tpl">⬇ Tải file mẫu Excel</button></div>' +
+      '<div class="card"><h2>Bước 2 · Chọn file đã điền</h2><p class="muted">Hỗ trợ .xlsx, .xls, .csv. Tên sheet và dòng tiêu đề phải giữ như file mẫu.</p>' +
+      '<input type="file" id="im-file" accept=".xlsx,.xls,.csv"></div></div>' +
+      '<div class="card" id="im-step3" style="display:none"><h2>Bước 3 · Kiểm tra & nhập</h2><div id="im-sheets"></div>' +
+      '<div class="filters" style="margin-top:12px"><label class="check"><input type="checkbox" id="im-skip"> Bỏ qua dòng lỗi, vẫn nhập các dòng đúng</label>' +
+      '<button class="btn" id="im-check">🔍 Kiểm tra (chưa ghi)</button><button class="btn primary" id="im-go">📥 Nhập dữ liệu</button></div><div id="im-result"></div></div>';
+    $('#im-tpl').onclick = function () { busy(this, downloadTemplate(spec)).catch(showError); };
+
+    function drawSheets() {
+      $('#im-sheets').innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr><th>Sheet trong file</th><th>Nhập vào bảng</th><th class="num">Số dòng</th><th>Cách nhập</th><th>Ghi chú</th></tr></thead><tbody>' +
+        sheets.map(function (sh, i) {
+          var t = specBy[sh.table];
+          var info = t ? rowsForTable(sh, t) : null;
+          sh.parsed = info;
+          var notes = !t ? '<span class="muted">Bỏ qua</span>' :
+            (info.missing.length ? '<span class="badge err">Thiếu cột: ' + esc(info.missing.join(', ')) + '</span> ' : '') +
+            (info.unknown.length ? '<span class="badge warn" title="' + esc(info.unknown.join(', ')) + '">' + info.unknown.length + ' cột không nhận diện</span>' : (info.missing.length ? '' : '<span class="badge ok">Đủ cột</span>'));
+          var modes = t ? '<select data-mode="' + i + '"><option value="upsert">Thêm mới + cập nhật theo mã</option>' +
+            (t.canReplace ? '<option value="replace"' + (sh.mode === 'replace' ? ' selected' : '') + '>' + (t.table === 'lessons' ? 'Thay thế TKB của các trường có trong file' : 'Thay thế TOÀN BỘ bảng') + '</option>' : '') + '</select>' : '';
+          return '<tr><td><b>' + esc(sh.name) + '</b></td><td><select data-table="' + i + '"><option value="">— Không nhập —</option>' +
+            spec.map(function (x) { return '<option value="' + x.table + '"' + (x.table === sh.table ? ' selected' : '') + '>' + esc(x.sheet + ' – ' + x.label) + '</option>'; }).join('') +
+            '</select></td><td class="num">' + (info ? info.rows.length : '') + '</td><td>' + modes + '</td><td>' + notes + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+      $$('[data-table]').forEach(function (sel) { sel.onchange = function () { sheets[+sel.getAttribute('data-table')].table = sel.value; drawSheets(); }; });
+      $$('[data-mode]').forEach(function (sel) { sel.onchange = function () { sheets[+sel.getAttribute('data-mode')].mode = sel.value; }; });
+    }
+
+    $('#im-file').onchange = function () {
+      var file = this.files[0];
+      if (!file) return;
+      $('#im-result').innerHTML = '';
+      loadSheetJs().then(function (XLSX) {
+        return file.arrayBuffer().then(function (buf) { sheets = parseWorkbook(XLSX, buf, spec); });
+      }).then(function () {
+        if (sheets.length === 1 && !sheets[0].table && spec.length === 1) sheets[0].table = spec[0].table;
+        $('#im-step3').style.display = '';
+        drawSheets();
+      }).catch(showError);
+    };
+
+    function jobs() {
+      return spec.map(function (t) {
+        return sheets.filter(function (sh) { return sh.table === t.table && sh.parsed && sh.parsed.rows.length; }).map(function (sh) { return { t: t, sh: sh }; });
+      }).reduce(function (a, b) { return a.concat(b); }, []);
+    }
+    function run(dryRun, btn) {
+      var list = jobs();
+      if (!list.length) { toast('Không có sheet nào có dữ liệu để nhập', 'warn'); return; }
+      var bad = list.filter(function (j) { return j.sh.parsed.missing.length; });
+      if (bad.length) { toast('Sheet "' + bad[0].sh.name + '" thiếu cột bắt buộc: ' + bad[0].sh.parsed.missing.join(', '), 'err'); return; }
+      var replaces = list.filter(function (j) { return j.sh.mode === 'replace'; });
+      var go = !dryRun && replaces.length ? confirmBox('Chế độ THAY THẾ sẽ xóa dữ liệu cũ của: ' + replaces.map(function (j) { return j.t.label; }).join(', ') + '. Tiếp tục?', 'Thay thế', true) : Promise.resolve(true);
+      go.then(function (ok) {
+        if (!ok) return;
+        var skip = $('#im-skip').checked;
+        var out = $('#im-result');
+        out.innerHTML = '';
+        btn.disabled = true;
+        var chain = Promise.resolve();
+        list.forEach(function (j) {
+          chain = chain.then(function () {
+            var row = document.createElement('div');
+            row.innerHTML = '<div class="alert info"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span> ' + esc(j.t.label) + ' (' + j.sh.parsed.rows.length + ' dòng)…</div>';
+            out.appendChild(row);
+            return call('import.data', { table: j.t.table, rows: j.sh.parsed.rows, mode: j.sh.mode || 'upsert', dryRun: dryRun, skipErrors: skip }).then(function (r) {
+              var cls = r.errors.length ? (r.written ? 'warn' : 'err') : 'ok';
+              var head = (dryRun ? 'Kiểm tra ' : (r.written ? '✔ Đã nhập ' : '✖ Chưa nhập ')) + esc(r.label) + ': ' +
+                (r.removed ? 'xóa ' + r.removed + ', ' : '') + 'thêm ' + r.inserted + ', cập nhật ' + r.updated + (r.errors.length ? ', <b>' + r.errors.length + ' dòng lỗi</b>' : ', không có lỗi');
+              row.innerHTML = '<div class="alert ' + cls + '">' + head + (r.errors.length ? '<div class="explain" style="margin-top:6px;max-height:180px;overflow:auto">' +
+                r.errors.slice(0, 100).map(esc).join('<br>') + (r.errors.length > 100 ? '<br>…' : '') + '</div>' : '') + '</div>';
+            }).catch(function (e) { row.innerHTML = '<div class="alert err">' + esc(j.t.label) + ': ' + esc(e.message) + '</div>'; });
+          });
+        });
+        chain.then(function () {
+          btn.disabled = false;
+          if (dryRun) {
+            out.insertAdjacentHTML('beforeend', '<div class="muted">Lưu ý: khi kiểm tra, mã môn/trường/GV mới trong cùng file chưa có trong hệ thống nên có thể báo lỗi tham chiếu – lỗi này tự hết khi nhập thật (hệ thống nhập theo thứ tự).</div>');
+          } else {
+            invalidate();
+            reloadLookups();
+            toast('Hoàn tất nhập dữ liệu', 'ok');
+          }
+        });
+      });
+    }
+    $('#im-check').onclick = function () { run(true, this); };
+    $('#im-go').onclick = function () { run(false, this); };
+  });
+}
+
 /* =============================== Đăng ký route =============================== */
 ROUTES = {
   dashboard: { title: 'Tổng quan', perm: 'view_schedule', render: viewDashboard },
@@ -820,6 +992,7 @@ ROUTES = {
   lessons: { title: 'Thời khóa biểu', perm: ['view_schedule', 'edit_timetable'], render: viewLessons },
   auto: { title: 'Xếp lịch tự động', perm: 'auto_schedule', render: viewAuto },
   data: { title: 'Danh mục dữ liệu', perm: 'view_schedule', render: viewData },
+  import: { title: 'Nhập dữ liệu', perm: ['edit_timetable', 'edit_teachers', 'manage_users'], render: viewImport },
   users: { title: 'Người dùng', perm: 'manage_users', render: viewUsers },
   settings: { title: 'Cấu hình', perm: 'manage_settings', render: viewSettings },
   audit: { title: 'Nhật ký', perm: 'view_audit', render: viewAudit },

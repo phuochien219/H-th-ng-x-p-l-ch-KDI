@@ -8,7 +8,7 @@
 var APP = {
   NAME: 'KDI Scheduler',
   TITLE: 'KDI Education – Hệ thống xếp lịch STEM',
-  VERSION: '1.0.0',
+  VERSION: '1.1.0',
   // Chỉ email thuộc các domain này được đăng nhập.
   ALLOWED_DOMAINS: ['kdi.edu.vn'],
   // Tài khoản quản trị gốc: luôn là admin, là người duy nhất được thêm/bớt admin.

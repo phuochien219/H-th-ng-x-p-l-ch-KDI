@@ -15,6 +15,14 @@ function onOpen() {
 }
 
 /**
+ * Trigger đơn giản: khi ai đó sửa trực tiếp trên Google Sheets thì xóa dữ liệu lưu tạm
+ * để ứng dụng web hiển thị ngay dữ liệu mới.
+ */
+function onEdit(e) {
+  try { CacheService.getScriptCache().remove('snap_meta'); } catch (err) { /* bỏ qua */ }
+}
+
+/**
  * Các hàm gọi từ menu là hàm "công khai" nên client web cũng gọi được qua
  * google.script.run → luôn kiểm tra quyền của người đang thao tác.
  * Ngoại lệ: lần cài đặt đầu tiên (chưa có sheet NguoiDung).

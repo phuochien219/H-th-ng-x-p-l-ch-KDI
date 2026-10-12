@@ -30,7 +30,7 @@ Hệ thống xếp lịch giáo viên KDI Education đến dạy STEM tại hơn
 | **Cảnh báo trùng lịch** | Phát hiện trùng giờ, không đủ thời gian di chuyển giữa 2 trường, xếp vào lịch bận, GV bị đánh dấu "Không xếp", vượt giờ, quá nhiều trường, môn chưa đào tạo, trường quá xa, mã GV/trường sai. Kiểm tra cả các thay đổi sửa tay trên Sheets. |
 | **Lịch trống** | Xem khoảng trống của GV theo từng thứ trong tuần. Tìm GV rảnh trong một khung giờ tại một trường (đã tính thời gian di chuyển), lọc theo môn, quận, loại GV. |
 | **Gán tay / tìm GV dạy thay** | Khi bấm vào một tiết, hệ thống xếp hạng mọi GV theo điểm, ghi rõ lý do GV nào không phù hợp, và cho gán bằng 1 cú bấm. Có thể 📌 **ghim** tiết để lần xếp tự động sau không đổi. |
-| **Nhập TKB nhanh** | Sale **dán thẳng từ Excel**, có xem trước và báo lỗi từng dòng, tùy chọn thay thế toàn bộ TKB cũ của trường. |
+| **Nhập liệu nhanh** | Tải **file Excel mẫu** (GV, trường, môn, trường ưu tiên, lịch bận, TKB, tài khoản), điền rồi **tải lên 1 lần**. Hệ thống kiểm tra từng dòng trước khi ghi. Sale cũng có thể dán TKB thẳng từ Excel. |
 | **Phân tích** | Tổng quan: % tiết đã xếp, công suất GV, GV vượt/thiếu giờ. **Cung – cầu theo môn** (gợi ý môn cần đào tạo thêm GV) và **phân bố theo quận** (gợi ý khu vực cần tuyển GV). |
 | **Xuất & thông báo** | Xuất toàn bộ lịch ra file Google Sheets mới (lưới theo GV, theo trường, tổng hợp giờ, chưa xếp, cảnh báo). **Gửi email lịch dạy** cho từng GV. |
 | **Quản trị** | Người dùng & phân quyền, cấu hình trọng số/định mức, nhật ký mọi thao tác. |
@@ -87,17 +87,22 @@ Khi đó, người dùng mở link đang đăng nhập Google bằng tài khoả
 
 > **Phương án dự phòng – đăng nhập bằng mã OTP:** nếu không đọc được email từ phiên Google (ví dụ khi triển khai cho "Bất kỳ ai"), màn hình đăng nhập sẽ yêu cầu nhập email `@kdi.edu.vn`. Hệ thống gửi **mã 6 số** qua email (mã có hiệu lực 10 phút, sai tối đa 5 lần, phiên đăng nhập kéo dài 6 giờ).
 
-### Bước 5 – Nhập dữ liệu thật
-Thư mục [`mau-du-lieu/`](mau-du-lieu) có file mẫu CSV (mở bằng Excel) cho từng sheet. Chép dữ liệu vào đúng sheet theo **tên cột**. Có thể đổi thứ tự cột hoặc thêm cột ghi chú riêng, vì hệ thống nhận diện cột theo tên tiêu đề.
+### Bước 5 – Nhập dữ liệu thật (bằng file Excel)
+1. Vào web → **Nhập dữ liệu từ Excel** → bấm **Tải file mẫu Excel**. Có thể dùng luôn file [`mau-du-lieu/Mau_nhap_lieu_KDI.xlsx`](mau-du-lieu/Mau_nhap_lieu_KDI.xlsx); file này có sẵn danh sách chọn sổ xuống.
+2. Mở file bằng Excel. Sheet **HuongDan** giải thích từng cột. Điền vào các sheet sau và xóa các dòng ví dụ (chữ nghiêng màu xám):
+   - **MonHoc**: môn STEM, mã môn ngắn (ví dụ RB = Robotics).
+   - **TruongHoc**: trường học. Tọa độ lấy từ Google Maps: nhấp phải vào vị trí trường, bấm vào dòng số đầu tiên của menu.
+   - **GiaoVien**: Loại GV (`Thường`/`Kiêm nhiệm`), xếp loại, các môn đã đào tạo (ví dụ `RB, SCR`), email @kdi.edu.vn.
+   - **GV_Truong**: trường **Ưu tiên** hoặc **Không xếp** của từng GV, kèm khoảng cách. Không bắt buộc, vì hệ thống tự ước tính khoảng cách từ tọa độ.
+   - **LichBan**: giờ bận của GV.
+   - **TKB**: thời khóa biểu STEM của các trường.
+   - **NguoiDung**: tài khoản nhân viên. Vai trò ghi `AC`, `Sale`, `Xem lịch`, `Giáo viên` hoặc `Admin`.
+3. Lưu file → chọn file trên web → **Kiểm tra (chưa ghi)**. Hệ thống báo lỗi theo **số dòng Excel**.
+4. Bấm **Nhập dữ liệu**. Có 2 cách nhập:
+   - **Thêm mới + cập nhật theo mã** *(mặc định)*: dòng trùng mã sẽ cập nhật bản ghi cũ, cột không có trong file giữ nguyên.
+   - **Thay thế**: xóa dữ liệu cũ rồi nhập lại. Riêng TKB chỉ thay thế TKB của các trường có trong file.
 
-1. `MonHoc` – danh mục môn STEM (mã môn dùng ở các sheet khác).
-2. `TruongHoc` – trường, quận/huyện, **tọa độ** (trên Google Maps: nhấp phải vào vị trí → bấm vào dòng tọa độ để sao chép).
-3. `GiaoVien` – loại GV (`Thường` / `Kiêm nhiệm`), xếp loại (A/B/C/D), **môn đã đào tạo** (mã môn, cách nhau dấu phẩy), tọa độ nhà, email `@kdi.edu.vn`.
-4. `GV_Truong` – **trường ưu tiên xếp** (`Ưu tiên`), trường không được xếp (`Không xếp`), khoảng cách thực tế (km). Không bắt buộc nhập khoảng cách cho mọi cặp: hệ thống tự **ước tính từ tọa độ** (đường chim bay × 1,3).
-5. `LichBan` – giờ bận của GV, đặc biệt GV kiêm nhiệm.
-6. `TKB` – thời khóa biểu STEM của các trường (Sale nhập trên web hoặc dán trực tiếp).
-
-Sau đó vào web → **Người dùng & phân quyền** để cấp vai trò AC, Sale… cho từng email.
+Sau đó có thể xem và sửa tiếp trong **Danh mục dữ liệu**, hoặc sửa trực tiếp trên Google Sheets.
 
 ---
 
@@ -150,7 +155,12 @@ Tiết không xếp được sẽ có **lý do cụ thể**, ví dụ: *"Không 
 6. Bấm **Gửi lịch cho GV** để gửi email, hoặc **Xuất Google Sheets** để gửi cho trường.
 7. Đầu học kỳ mới: tạo bản sao file Google Sheets để lưu trữ học kỳ cũ.
 
-## 7. Giới hạn của Google Apps Script cần biết
+## 7. Tốc độ & giới hạn của Google Apps Script
+- **Lưu tạm dữ liệu:** dữ liệu được lưu tạm 5 phút nên các trang mở nhanh hơn nhiều so với đọc trực tiếp Google Sheets mỗi lần.
+  - Thao tác trên web có hiệu lực ngay.
+  - Sửa tay trên Google Sheets cũng được cập nhật ngay nhờ trigger `onEdit`. Riêng thao tác **xóa dòng** trên Sheets cần bấm **⟳ Làm mới** ở góc trên ứng dụng, hoặc chờ tối đa 5 phút.
+- Lần mở đầu tiên trong ngày thường chậm hơn (khoảng 2–4 giây) vì Google phải "khởi động" script. Đây là đặc điểm của Apps Script.
+
 - Mỗi lần chạy tối đa 6 phút (thuật toán hiện chạy khoảng 1–2 giây). Gửi email bị giới hạn khoảng 1.500 email/ngày với Google Workspace.
 - Dữ liệu đọc trực tiếp từ Sheets, nên mỗi thao tác mất khoảng 1–3 giây. Hệ thống dùng `LockService` để 2 người cập nhật cùng lúc không ghi đè nhau.
 - Mã OTP và phiên đăng nhập OTP lưu trong `CacheService`, có thể hết hạn sớm hơn 6 giờ.
@@ -168,12 +178,13 @@ apps-script/         Mã nguồn Apps Script (đẩy bằng clasp)
   Conflicts.gs       Phát hiện trùng lịch, lịch trống, số liệu tổng quan
   Auth.gs            Đăng nhập (Google Workspace / OTP), phân quyền, quản lý người dùng
   Api.gs             Điểm vào duy nhất api(action, args, token) + kiểm tra quyền tập trung
+  Import.gs          Nhập dữ liệu hàng loạt từ file Excel (kiểm tra từng dòng)
   Export.gs          Xuất Google Sheets, gửi email lịch dạy
   Setup.gs           Menu trong Sheets, khởi tạo sheet, dữ liệu mẫu
   WebApp.gs          doGet()
   Index/Styles/Client/Views.html   Giao diện web (JavaScript thuần, không thư viện ngoài)
 dist/                Bản gộp 1 file Code.gs để chép–dán (tạo bằng npm run build)
-mau-du-lieu/         File mẫu CSV cho từng sheet
+mau-du-lieu/         File Excel mẫu (tạo lại: python3 tools/make_template_xlsx.py)
 tests/               Bộ giả lập Apps Script + kiểm thử (Node ≥ 18, không cần cài gói)
 tools/dev-server.js  Chạy giao diện trên máy cá nhân với dữ liệu mẫu, không cần Google
 ```

@@ -4,8 +4,63 @@
  * thêm cột ghi chú riêng mà không làm hỏng hệ thống.
  */
 
+/**
+ * TĂNG TỐC: đọc Google Sheets mất ~0,2–0,5 giây/sheet, nên dữ liệu các bảng chính được
+ * lưu tạm (CacheService) dưới dạng 1 "ảnh chụp" dùng chung cho mọi người dùng.
+ * - Mọi thao tác ghi của hệ thống xóa ảnh chụp ngay lập tức.
+ * - Sửa tay trên Sheets: trigger onEdit xóa ảnh chụp; trường hợp khác (vd. xóa dòng)
+ *   ảnh chụp tự hết hạn sau SNAPSHOT_TTL_SEC giây.
+ * - Trong withLock_ (khi ghi) luôn đọc trực tiếp từ sheet để đảm bảo chính xác.
+ */
+var SNAPSHOT_TABLES = ['settings', 'users', 'subjects', 'schools', 'teachers', 'links', 'unavailability', 'lessons'];
+var SNAPSHOT_TTL_SEC = 300;
+var SNAPSHOT_CHUNK = 30000; // ký tự/ô cache (giới hạn 100KB, tiếng Việt tối đa 3 byte/ký tự)
+
 var Db = (function () {
   var cache = {};
+  var fresh = false;
+  var snapMemo = null;
+
+  function snapshot_() {
+    if (snapMemo) return snapMemo;
+    var sc = null;
+    try { sc = CacheService.getScriptCache(); } catch (e) { sc = null; }
+    if (sc) {
+      try {
+        var meta = sc.get('snap_meta');
+        if (meta) {
+          var keys = [];
+          for (var i = 0; i < Number(meta); i++) keys.push('snap_' + i);
+          var parts = sc.getAll(keys);
+          var complete = keys.every(function (k) { return parts[k] !== undefined && parts[k] !== null; });
+          if (complete) {
+            snapMemo = JSON.parse(keys.map(function (k) { return parts[k]; }).join(''));
+            return snapMemo;
+          }
+        }
+      } catch (e) { /* đọc lại từ sheet */ }
+    }
+    var data = {};
+    SNAPSHOT_TABLES.forEach(function (t) { data[t] = readSheet_(t); });
+    snapMemo = data;
+    if (sc) {
+      try {
+        var json = JSON.stringify(data);
+        var map = {};
+        var n = Math.ceil(json.length / SNAPSHOT_CHUNK);
+        for (var j = 0; j < n; j++) map['snap_' + j] = json.substr(j * SNAPSHOT_CHUNK, SNAPSHOT_CHUNK);
+        map.snap_meta = String(n);
+        sc.putAll(map, SNAPSHOT_TTL_SEC);
+      } catch (e) { /* dữ liệu quá lớn để lưu tạm – vẫn chạy bình thường */ }
+    }
+    return snapMemo;
+  }
+
+  function invalidateSnapshot(table) {
+    if (table && SNAPSHOT_TABLES.indexOf(table) < 0) return;
+    snapMemo = null;
+    try { CacheService.getScriptCache().remove('snap_meta'); } catch (e) { /* bỏ qua */ }
+  }
 
   function ss() {
     var active = null;
@@ -56,6 +111,7 @@ var Db = (function () {
       }
     });
     delete cache[table];
+    invalidateSnapshot(table);
     return headers;
   }
 
@@ -102,8 +158,16 @@ var Db = (function () {
     return true;
   }
 
-  /** Danh sách đối tượng của bảng (bỏ dòng trống). */
+  /** Danh sách đối tượng của bảng (bỏ dòng trống) – dùng ảnh chụp nếu có thể. */
   function read(table) {
+    if (!fresh && SNAPSHOT_TABLES.indexOf(table) >= 0) {
+      return snapshot_()[table].map(function (o) { return Object.assign({}, o); });
+    }
+    return readSheet_(table);
+  }
+
+  /** Đọc trực tiếp từ sheet. */
+  function readSheet_(table) {
     var entry = load(table);
     if (!entry.rows) {
       var out = [];
@@ -165,6 +229,7 @@ var Db = (function () {
     def(table).columns.forEach(function (c) {
       if (TEXT_COLUMNS[c.type] && entry.col[c.key] >= 0) sh.getRange(start, entry.col[c.key] + 1, rows.length, 1).setNumberFormat('@');
     });
+    invalidateSnapshot(table);
     sh.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
     def(table).columns.forEach(function (c) {
       if (c.type === 'bool' && entry.col[c.key] >= 0) sh.getRange(start, entry.col[c.key] + 1, rows.length, 1).insertCheckboxes();
@@ -189,6 +254,7 @@ var Db = (function () {
         if (c.key in it && entry.col[c.key] >= 0) touchedCols[entry.col[c.key]] = true;
       });
     });
+    invalidateSnapshot(table);
     var width = entry.header.length;
     if (items.length <= 10) {
       items.forEach(function (it) {
@@ -211,6 +277,7 @@ var Db = (function () {
     if (!rowNumbers || !rowNumbers.length) return;
     var sh = sheet(table, false);
     if (!sh) return;
+    invalidateSnapshot(table);
     // Sheets không cho xóa hết các dòng không cố định → chừa lại 1 dòng trống.
     if (sh.getMaxRows() - rowNumbers.length <= 1) sh.insertRowsAfter(sh.getMaxRows(), 1);
     var sorted = rowNumbers.slice().sort(function (a, b) { return b - a; });
@@ -239,6 +306,7 @@ var Db = (function () {
       sh.deleteRows(2, lastRow - 1);
     }
     delete cache[table];
+    invalidateSnapshot(table);
     append(table, objs);
   }
 
@@ -257,6 +325,11 @@ var Db = (function () {
 
   function clearCache() {
     cache = {};
+    snapMemo = null;
+  }
+
+  function setFresh(v) {
+    fresh = !!v;
   }
 
   return {
@@ -271,6 +344,8 @@ var Db = (function () {
     keyOf: keyOf,
     findByKey: findByKey,
     clearCache: clearCache,
+    setFresh: setFresh,
+    invalidateSnapshot: invalidateSnapshot,
   };
 })();
 
@@ -360,8 +435,11 @@ function withLock_(fn) {
   if (!lock.tryLock(30000)) throw new Error('Hệ thống đang bận (người khác đang cập nhật). Vui lòng thử lại sau ít giây.');
   try {
     Db.clearCache();
+    Db.setFresh(true);
     return fn();
   } finally {
+    Db.setFresh(false);
+    Db.clearCache();
     lock.releaseLock();
   }
 }

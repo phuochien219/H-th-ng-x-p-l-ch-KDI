@@ -1,5 +1,5 @@
 /**
- * KDI Scheduler 1.0.0 – bản gộp 1 file (tự động tạo bởi tools/build-bundle.js).
+ * KDI Scheduler 1.1.0 – bản gộp 1 file (tự động tạo bởi tools/build-bundle.js).
  * KHÔNG sửa trực tiếp file này – sửa trong thư mục apps-script/ rồi chạy: npm run build
  */
 
@@ -14,7 +14,7 @@
 var APP = {
   NAME: 'KDI Scheduler',
   TITLE: 'KDI Education – Hệ thống xếp lịch STEM',
-  VERSION: '1.0.0',
+  VERSION: '1.1.0',
   // Chỉ email thuộc các domain này được đăng nhập.
   ALLOWED_DOMAINS: ['kdi.edu.vn'],
   // Tài khoản quản trị gốc: luôn là admin, là người duy nhất được thêm/bớt admin.
@@ -457,8 +457,63 @@ function escapeHtml(s) {
  * thêm cột ghi chú riêng mà không làm hỏng hệ thống.
  */
 
+/**
+ * TĂNG TỐC: đọc Google Sheets mất ~0,2–0,5 giây/sheet, nên dữ liệu các bảng chính được
+ * lưu tạm (CacheService) dưới dạng 1 "ảnh chụp" dùng chung cho mọi người dùng.
+ * - Mọi thao tác ghi của hệ thống xóa ảnh chụp ngay lập tức.
+ * - Sửa tay trên Sheets: trigger onEdit xóa ảnh chụp; trường hợp khác (vd. xóa dòng)
+ *   ảnh chụp tự hết hạn sau SNAPSHOT_TTL_SEC giây.
+ * - Trong withLock_ (khi ghi) luôn đọc trực tiếp từ sheet để đảm bảo chính xác.
+ */
+var SNAPSHOT_TABLES = ['settings', 'users', 'subjects', 'schools', 'teachers', 'links', 'unavailability', 'lessons'];
+var SNAPSHOT_TTL_SEC = 300;
+var SNAPSHOT_CHUNK = 30000; // ký tự/ô cache (giới hạn 100KB, tiếng Việt tối đa 3 byte/ký tự)
+
 var Db = (function () {
   var cache = {};
+  var fresh = false;
+  var snapMemo = null;
+
+  function snapshot_() {
+    if (snapMemo) return snapMemo;
+    var sc = null;
+    try { sc = CacheService.getScriptCache(); } catch (e) { sc = null; }
+    if (sc) {
+      try {
+        var meta = sc.get('snap_meta');
+        if (meta) {
+          var keys = [];
+          for (var i = 0; i < Number(meta); i++) keys.push('snap_' + i);
+          var parts = sc.getAll(keys);
+          var complete = keys.every(function (k) { return parts[k] !== undefined && parts[k] !== null; });
+          if (complete) {
+            snapMemo = JSON.parse(keys.map(function (k) { return parts[k]; }).join(''));
+            return snapMemo;
+          }
+        }
+      } catch (e) { /* đọc lại từ sheet */ }
+    }
+    var data = {};
+    SNAPSHOT_TABLES.forEach(function (t) { data[t] = readSheet_(t); });
+    snapMemo = data;
+    if (sc) {
+      try {
+        var json = JSON.stringify(data);
+        var map = {};
+        var n = Math.ceil(json.length / SNAPSHOT_CHUNK);
+        for (var j = 0; j < n; j++) map['snap_' + j] = json.substr(j * SNAPSHOT_CHUNK, SNAPSHOT_CHUNK);
+        map.snap_meta = String(n);
+        sc.putAll(map, SNAPSHOT_TTL_SEC);
+      } catch (e) { /* dữ liệu quá lớn để lưu tạm – vẫn chạy bình thường */ }
+    }
+    return snapMemo;
+  }
+
+  function invalidateSnapshot(table) {
+    if (table && SNAPSHOT_TABLES.indexOf(table) < 0) return;
+    snapMemo = null;
+    try { CacheService.getScriptCache().remove('snap_meta'); } catch (e) { /* bỏ qua */ }
+  }
 
   function ss() {
     var active = null;
@@ -509,6 +564,7 @@ var Db = (function () {
       }
     });
     delete cache[table];
+    invalidateSnapshot(table);
     return headers;
   }
 
@@ -555,8 +611,16 @@ var Db = (function () {
     return true;
   }
 
-  /** Danh sách đối tượng của bảng (bỏ dòng trống). */
+  /** Danh sách đối tượng của bảng (bỏ dòng trống) – dùng ảnh chụp nếu có thể. */
   function read(table) {
+    if (!fresh && SNAPSHOT_TABLES.indexOf(table) >= 0) {
+      return snapshot_()[table].map(function (o) { return Object.assign({}, o); });
+    }
+    return readSheet_(table);
+  }
+
+  /** Đọc trực tiếp từ sheet. */
+  function readSheet_(table) {
     var entry = load(table);
     if (!entry.rows) {
       var out = [];
@@ -618,6 +682,7 @@ var Db = (function () {
     def(table).columns.forEach(function (c) {
       if (TEXT_COLUMNS[c.type] && entry.col[c.key] >= 0) sh.getRange(start, entry.col[c.key] + 1, rows.length, 1).setNumberFormat('@');
     });
+    invalidateSnapshot(table);
     sh.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
     def(table).columns.forEach(function (c) {
       if (c.type === 'bool' && entry.col[c.key] >= 0) sh.getRange(start, entry.col[c.key] + 1, rows.length, 1).insertCheckboxes();
@@ -642,6 +707,7 @@ var Db = (function () {
         if (c.key in it && entry.col[c.key] >= 0) touchedCols[entry.col[c.key]] = true;
       });
     });
+    invalidateSnapshot(table);
     var width = entry.header.length;
     if (items.length <= 10) {
       items.forEach(function (it) {
@@ -664,6 +730,7 @@ var Db = (function () {
     if (!rowNumbers || !rowNumbers.length) return;
     var sh = sheet(table, false);
     if (!sh) return;
+    invalidateSnapshot(table);
     // Sheets không cho xóa hết các dòng không cố định → chừa lại 1 dòng trống.
     if (sh.getMaxRows() - rowNumbers.length <= 1) sh.insertRowsAfter(sh.getMaxRows(), 1);
     var sorted = rowNumbers.slice().sort(function (a, b) { return b - a; });
@@ -692,6 +759,7 @@ var Db = (function () {
       sh.deleteRows(2, lastRow - 1);
     }
     delete cache[table];
+    invalidateSnapshot(table);
     append(table, objs);
   }
 
@@ -710,6 +778,11 @@ var Db = (function () {
 
   function clearCache() {
     cache = {};
+    snapMemo = null;
+  }
+
+  function setFresh(v) {
+    fresh = !!v;
   }
 
   return {
@@ -724,6 +797,8 @@ var Db = (function () {
     keyOf: keyOf,
     findByKey: findByKey,
     clearCache: clearCache,
+    setFresh: setFresh,
+    invalidateSnapshot: invalidateSnapshot,
   };
 })();
 
@@ -813,8 +888,11 @@ function withLock_(fn) {
   if (!lock.tryLock(30000)) throw new Error('Hệ thống đang bận (người khác đang cập nhật). Vui lòng thử lại sau ít giây.');
   try {
     Db.clearCache();
+    Db.setFresh(true);
     return fn();
   } finally {
+    Db.setFresh(false);
+    Db.clearCache();
     lock.releaseLock();
   }
 }
@@ -1983,6 +2061,8 @@ function dispatch_(action, args, token) {
 
   var user = resolveUser_(token);
   if (action === 'auth.me') return publicUser_(user);
+  // Khởi động: gộp "ai đang đăng nhập" + dữ liệu ban đầu vào 1 lần gọi.
+  if (action === 'app.start') return user.status === 'ok' ? bootstrap_(args, user) : { user: publicUser_(user) };
   if (user.status !== 'ok') throw userError_(authMessage_(user), 'AUTH');
 
   var def = ACTIONS[action];
@@ -2488,27 +2568,8 @@ function dataSave_(args, user) {
   if (!conf) throw userError_('Bảng không hợp lệ.');
   if (!hasPerm(user, conf.edit)) throw userError_('Bạn không có quyền sửa dữ liệu này.', 'FORBIDDEN');
   return withLock_(function () {
-    var input = args.record || {};
-    var rec = {};
-    TABLES[table].columns.forEach(function (c) {
-      if (!(c.key in input) || c.auto) return;
-      var v = input[c.key];
-      if (c.type === 'bool') v = toBool(v, c.def);
-      else if (c.type === 'number') { v = toNum(v); if (v === null) v = ''; }
-      else if (c.type === 'time') { var t = parseTime(v); if (str(v) && t === null) throw userError_(c.header + ': giờ không hợp lệ'); v = t === null ? '' : fmtTime(t); }
-      else if (c.type === 'weekday') { var w = parseWeekday(v); if (w < 0) throw userError_(c.header + ': thứ không hợp lệ'); v = weekdayLabel(w); }
-      else if (c.type === 'subjects') v = (Array.isArray(v) ? v : splitList(v)).map(function (x) { return str(x).toUpperCase(); }).join(', ');
-      else v = str(v);
-      if (CODE_FIELDS[c.key] && typeof v === 'string') v = v.toUpperCase();
-      if (c.key === 'email') v = normEmail(v);
-      if (c.required && (v === '' || v === null)) throw userError_('Thiếu thông tin bắt buộc: ' + c.header);
-      if (c.options && v && c.options.indexOf(v) < 0) throw userError_(c.header + ': giá trị "' + v + '" không hợp lệ');
-      rec[c.key] = v;
-    });
+    var rec = normalizeRecord_(table, args.record || {});
     validateRefs_(table, rec);
-    if (table === 'unavailability' && rec.start && rec.end && parseTime(rec.end) <= parseTime(rec.start)) {
-      throw userError_('Giờ kết thúc phải sau giờ bắt đầu.');
-    }
     var originalKey = str(args.originalKey);
     var newKey = Db.keyOf(table, Object.assign({}, rec, table === 'unavailability' ? { id: originalKey } : {}));
     var existing = originalKey ? Db.findByKey(table, originalKey) : null;
@@ -2537,11 +2598,58 @@ function dataSave_(args, user) {
   });
 }
 
-function validateRefs_(table, rec) {
-  if (rec.teacher !== undefined && rec.teacher && !Db.findByKey('teachers', rec.teacher)) throw userError_('Mã GV "' + rec.teacher + '" không tồn tại.');
-  if (rec.school !== undefined && rec.school && !Db.findByKey('schools', rec.school)) throw userError_('Mã trường "' + rec.school + '" không tồn tại.');
+/** Chuẩn hóa 1 bản ghi danh mục từ form / file Excel (chỉ các trường có trong input). */
+function normalizeRecord_(table, input) {
+  var rec = {};
+  TABLES[table].columns.forEach(function (c) {
+    if (!(c.key in input) || c.auto) return;
+    var v = input[c.key];
+    if (c.type === 'bool') v = toBool(v, c.def);
+    else if (c.type === 'number') {
+      if (str(v) && toNum(v) === null) throw userError_(c.header + ': "' + v + '" không phải là số');
+      v = toNum(v);
+      if (v === null) v = '';
+    } else if (c.type === 'time') {
+      var t = parseTime(v);
+      if (str(v) && t === null) throw userError_(c.header + ': giờ "' + v + '" không hợp lệ (vd. 07:30)');
+      v = t === null ? '' : fmtTime(t);
+    } else if (c.type === 'weekday') {
+      var w = parseWeekday(v);
+      if (w < 0) throw userError_(c.header + ': thứ "' + v + '" không hợp lệ (Thứ 2 … Thứ 7, Chủ nhật)');
+      v = weekdayLabel(w);
+    } else if (c.type === 'subjects') v = (Array.isArray(v) ? v : splitList(v)).map(function (x) { return str(x).toUpperCase(); }).join(', ');
+    else v = str(v);
+    if (CODE_FIELDS[c.key] && typeof v === 'string') v = v.toUpperCase();
+    if (c.key === 'email') v = normEmail(v);
+    if (c.required && (v === '' || v === null)) throw userError_('Thiếu thông tin bắt buộc: ' + c.header);
+    if (c.options && v) {
+      var match = c.options.filter(function (o) { return removeDiacritics_(o).toLowerCase() === removeDiacritics_(v).toLowerCase(); })[0];
+      if (!match) throw userError_(c.header + ': giá trị "' + v + '" không hợp lệ (chọn: ' + c.options.join(', ') + ')');
+      v = match;
+    }
+    rec[c.key] = v;
+  });
+  if (table === 'unavailability' && rec.start && rec.end && parseTime(rec.end) <= parseTime(rec.start)) {
+    throw userError_('Giờ kết thúc phải sau giờ bắt đầu.');
+  }
+  return rec;
+}
+
+/** Tập mã đang có (để kiểm tra tham chiếu nhanh khi nhập nhiều dòng). */
+function refSets_() {
+  var sets = { teachers: {}, schools: {}, subjects: {} };
+  Object.keys(sets).forEach(function (t) {
+    Db.read(t).forEach(function (r) { sets[t][str(r.code).toUpperCase()] = true; });
+  });
+  return sets;
+}
+
+function validateRefs_(table, rec, refs) {
+  refs = refs || refSets_();
+  if (rec.teacher !== undefined && rec.teacher && !refs.teachers[rec.teacher]) throw userError_('Mã GV "' + rec.teacher + '" không tồn tại.');
+  if (rec.school !== undefined && rec.school && !refs.schools[rec.school]) throw userError_('Mã trường "' + rec.school + '" không tồn tại.');
   if (table === 'teachers' && rec.subjects) {
-    var bad = splitList(rec.subjects).filter(function (c) { return !Db.findByKey('subjects', c); });
+    var bad = splitList(rec.subjects).filter(function (c) { return !refs.subjects[c]; });
     if (bad.length) throw userError_('Mã môn không tồn tại: ' + bad.join(', '));
   }
   if (table === 'teachers' && rec.email && !isAllowedEmail(rec.email)) throw userError_('Email GV phải là email @' + APP.ALLOWED_DOMAINS[0]);
@@ -2731,9 +2839,303 @@ var ACTIONS = {
       return rows.slice(-limit).reverse().map(function (r) { return { at: r.at, user: r.user, action: r.action, entity: r.entity, details: r.details }; });
     },
   },
+  'cache.refresh': { fn: function () { Db.invalidateSnapshot(); return { ok: true }; } },
+  'import.spec': { fn: function (a, u) { return importSpec_(a, u); } },
+  'import.data': { fn: function (a, u) { return importData_(a, u); } },
   'export.sheet': { perm: 'export', fn: function (a, u) { return exportToSpreadsheet_(u); } },
   'email.schedules': { perm: 'send_email', fn: function (a, u) { return emailSchedules_(u, a.teachers || []); } },
 };
+
+/* ======================= Import.gs ======================= */
+/**
+ * Nhập dữ liệu hàng loạt từ file Excel mẫu (giao diện đọc file .xlsx trên trình duyệt,
+ * gửi từng bảng lên đây). Mọi dòng được kiểm tra trước khi ghi; có lỗi thì không ghi
+ * gì (trừ khi người dùng chọn "bỏ qua dòng lỗi").
+ */
+
+/** Thứ tự nhập quan trọng: môn → trường → GV → liên kết → lịch bận → TKB → tài khoản. */
+var IMPORT_TABLES = {
+  subjects: { perm: 'edit_teachers' },
+  schools: { perm: 'edit_schools' },
+  teachers: { perm: 'edit_teachers' },
+  links: { perm: 'edit_teachers' },
+  unavailability: { perm: 'edit_teachers' },
+  lessons: { perm: 'edit_timetable' },
+  users: { perm: 'manage_users' },
+};
+var IMPORT_ORDER = ['subjects', 'schools', 'teachers', 'links', 'unavailability', 'lessons', 'users'];
+var IMPORT_SKIP_COLUMNS = {
+  lessons: ['source', 'explain', 'updatedAt', 'updatedBy'],
+  users: ['addedBy', 'createdAt', 'lastLogin'],
+  unavailability: ['id'],
+};
+var USER_ROLE_OPTIONS = ['Admin', 'AC', 'Sale', 'Xem lịch', 'Giáo viên', 'Chờ duyệt'];
+var MAX_IMPORT_ROWS = 5000;
+
+function importColumns_(table) {
+  var skip = IMPORT_SKIP_COLUMNS[table] || [];
+  return TABLES[table].columns.filter(function (c) { return skip.indexOf(c.key) < 0; }).map(function (c) {
+    var col = { key: c.key, header: c.header, type: c.type || 'text', required: !!c.required, options: c.options || null };
+    if (table === 'users' && c.key === 'role') col.options = USER_ROLE_OPTIONS;
+    if (table === 'lessons' && c.key === 'id') col.hint = 'Để trống khi thêm tiết mới; giữ ID để cập nhật tiết đã có';
+    col.hint = col.hint || columnHint_(col);
+    return col;
+  });
+}
+
+function columnHint_(c) {
+  switch (c.type) {
+    case 'weekday': return 'Thứ 2, Thứ 3, …, Thứ 7, Chủ nhật';
+    case 'time': return 'Giờ:phút, vd. 07:30';
+    case 'bool': return 'TRUE (có) / FALSE (không)';
+    case 'subjects': return 'Mã môn, nhiều môn cách nhau dấu phẩy (vd. RB, SCR)';
+    case 'teacher': return 'Mã GV có trong sheet GiaoVien';
+    case 'school': return 'Mã trường có trong sheet TruongHoc';
+    case 'subject': return 'Mã môn hoặc tên môn trong sheet MonHoc';
+    case 'number': return 'Số (dùng dấu chấm hoặc phẩy cho phần thập phân)';
+    case 'color': return 'Mã màu, vd. #e8590c';
+    case 'phone': return 'Số điện thoại';
+    default: return c.options ? 'Chọn: ' + c.options.join(' / ') : '';
+  }
+}
+
+/** Mô tả các bảng người dùng được phép nhập + dòng ví dụ (dùng để tạo file mẫu). */
+function importSpec_(args, user) {
+  var demo = buildDemoData(20260901);
+  var examples = {
+    subjects: demo.subjects.slice(0, 3),
+    schools: demo.schools.slice(0, 2),
+    teachers: demo.teachers.slice(0, 2),
+    links: [demo.links[0], demo.links.filter(function (l) { return l.preference === 'Không xếp'; })[0]],
+    unavailability: demo.unavailability.slice(0, 2),
+    lessons: demo.lessons.slice(0, 3).map(function (l) { return Object.assign({}, l, { id: '' }); }),
+    users: [
+      { email: 'ten.ac@kdi.edu.vn', name: 'Nguyễn Văn A', role: 'AC', active: true },
+      { email: 'ten.sale@kdi.edu.vn', name: 'Trần Thị B', role: 'Sale', active: true },
+    ],
+  };
+  return IMPORT_ORDER.filter(function (t) { return hasPerm(user, IMPORT_TABLES[t].perm); }).map(function (t) {
+    var cols = importColumns_(t);
+    return {
+      table: t, sheet: TABLES[t].sheet, label: TABLES[t].label, columns: cols,
+      examples: examples[t].map(function (r) {
+        return cols.map(function (c) {
+          var v = r[c.key];
+          if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+          return v === undefined || v === null ? '' : String(v);
+        });
+      }),
+      canReplace: t !== 'users',
+    };
+  });
+}
+
+/**
+ * args: { table, rows: [{key: value, _line}], mode: 'upsert' | 'replace', dryRun, skipErrors }
+ *   - upsert: thêm mới + cập nhật bản ghi trùng mã (cột không có trong file được giữ nguyên)
+ *   - replace: xóa dữ liệu cũ của bảng (TKB: chỉ của các trường có trong file) rồi nhập mới
+ */
+function importData_(args, user) {
+  var table = String(args.table || '');
+  var conf = IMPORT_TABLES[table];
+  if (!conf) throw userError_('Bảng không hợp lệ: ' + table);
+  if (!hasPerm(user, conf.perm)) throw userError_('Bạn không có quyền nhập dữ liệu "' + TABLES[table].label + '".', 'FORBIDDEN');
+  var rows = args.rows || [];
+  if (!rows.length) throw userError_('Sheet "' + TABLES[table].sheet + '" không có dòng dữ liệu nào.');
+  if (rows.length > MAX_IMPORT_ROWS) throw userError_('Tối đa ' + MAX_IMPORT_ROWS + ' dòng mỗi bảng.');
+  var mode = args.mode === 'replace' ? 'replace' : 'upsert';
+  if (table === 'users' && mode === 'replace') throw userError_('Tài khoản chỉ hỗ trợ thêm mới / cập nhật.');
+  return withLock_(function () {
+    var res;
+    if (table === 'lessons') res = importLessons_(rows, mode, args, user);
+    else if (table === 'users') res = importUsers_(rows, args, user);
+    else res = importGeneric_(table, rows, mode, args, user);
+    res.table = table;
+    res.label = TABLES[table].label;
+    res.total = rows.length;
+    res.mode = mode;
+    if (res.written) {
+      audit_(user, 'Nhập dữ liệu từ Excel', TABLES[table].sheet,
+        (mode === 'replace' ? 'Thay thế' : 'Thêm/cập nhật') + ': thêm ' + res.inserted + ', cập nhật ' + res.updated +
+        (res.removed ? ', xóa ' + res.removed : '') + (res.errors.length ? ', bỏ qua ' + res.errors.length + ' dòng lỗi' : ''));
+    }
+    return res;
+  });
+}
+
+function lineOf_(raw, i) {
+  return raw && raw._line ? raw._line : i + 2;
+}
+
+function shouldWrite_(args, errors) {
+  return !args.dryRun && (!errors.length || args.skipErrors);
+}
+
+function importGeneric_(table, rows, mode, args, user) {
+  var refs = refSets_();
+  var current = Db.read(table);
+  var existing = {};
+  if (mode === 'upsert') current.forEach(function (r) { existing[Db.keyOf(table, r)] = r; });
+  var seen = {};
+  var errors = [];
+  var inserts = [];
+  var updates = [];
+  rows.forEach(function (raw, i) {
+    var line = lineOf_(raw, i);
+    try {
+      var rec = normalizeRecord_(table, raw);
+      TABLES[table].columns.forEach(function (c) {
+        if (c.required && !c.auto && !(c.key in rec)) throw userError_('Thiếu cột bắt buộc: ' + c.header);
+      });
+      validateRefs_(table, rec, refs);
+      if (table !== 'unavailability') {
+        var key = Db.keyOf(table, rec);
+        if (seen[key]) throw userError_('Trùng mã "' + key + '" với dòng ' + seen[key]);
+        seen[key] = line;
+        if (existing[key]) {
+          rec._row = existing[key]._row;
+          updates.push(rec);
+          return;
+        }
+      }
+      TABLES[table].columns.forEach(function (c) {
+        if (!(c.key in rec) && c.def !== undefined) rec[c.key] = c.def;
+      });
+      inserts.push(rec);
+    } catch (e) {
+      errors.push('Dòng ' + line + ': ' + e.message);
+    }
+  });
+  var res = { inserted: inserts.length, updated: updates.length, removed: mode === 'replace' ? current.length : 0, errors: errors, written: false };
+  if (!shouldWrite_(args, errors)) return res;
+  if (table === 'unavailability' && inserts.length) {
+    var ids = nextIds_('unavailability', 'LB', inserts.length);
+    inserts.forEach(function (r, k) { r.id = ids[k]; });
+  }
+  if (mode === 'replace') {
+    Db.replaceAll(table, inserts);
+  } else {
+    Db.update(table, updates);
+    Db.append(table, inserts);
+  }
+  res.written = true;
+  return res;
+}
+
+function importLessons_(rows, mode, args, user) {
+  var ctx = context_();
+  var canAssign = hasPerm(user, 'assign');
+  var errors = [];
+  var inserts = [];
+  var updates = [];
+  var schoolsInFile = {};
+  var now = nowString();
+  rows.forEach(function (raw, i) {
+    var line = lineOf_(raw, i);
+    try {
+      var norm = normalizeLessonInput_(ctx, raw);
+      if (norm.error) throw userError_(norm.error);
+      var o = norm.obj;
+      var t = str(raw.teacher).toUpperCase();
+      if (t) {
+        if (!canAssign) throw userError_('Bạn không có quyền phân công GV – hãy để trống cột "Mã GV".');
+        if (!ctx.teachers[t]) throw userError_('Mã GV "' + t + '" không tồn tại.');
+        o.teacher = t;
+        o.source = 'Thủ công';
+        o.explain = '';
+      }
+      if (canAssign && str(raw.locked) !== '') o.locked = toBool(raw.locked, false);
+      o.updatedAt = now;
+      o.updatedBy = user.email;
+      schoolsInFile[o.school] = true;
+      var id = str(raw.id);
+      if (mode === 'upsert' && id && ctx.lessons[id]) {
+        o._row = ctx.lessons[id].row;
+        updates.push(o);
+      } else {
+        if (!('teacher' in o)) o.teacher = '';
+        if (!('locked' in o)) o.locked = false;
+        inserts.push(o);
+      }
+    } catch (e) {
+      errors.push('Dòng ' + line + ': ' + e.message);
+    }
+  });
+  var removeRows = [];
+  if (mode === 'replace') {
+    removeRows = Db.read('lessons').filter(function (l) { return schoolsInFile[str(l.school).toUpperCase()]; }).map(function (l) { return l._row; });
+  }
+  var res = { inserted: inserts.length, updated: updates.length, removed: removeRows.length, errors: errors, written: false };
+  if (!shouldWrite_(args, errors)) return res;
+  Db.update('lessons', updates);
+  Db.remove('lessons', removeRows);
+  if (inserts.length) {
+    var ids = nextIds_('lessons', 'TKB', inserts.length);
+    inserts.forEach(function (o, k) { o.id = ids[k]; });
+    Db.append('lessons', inserts);
+  }
+  res.written = true;
+  return res;
+}
+
+/** "AC", "Chuyên viên xếp lịch (AC)", "scheduler" … → mã vai trò. */
+function parseRole_(v) {
+  var s = removeDiacritics_(str(v)).toLowerCase();
+  if (!s) return 'viewer';
+  var aliases = {
+    admin: 'admin', 'quan tri': 'admin', 'quan tri vien': 'admin',
+    ac: 'scheduler', 'xep lich': 'scheduler', 'chuyen vien xep lich': 'scheduler',
+    sale: 'sale', 'kinh doanh': 'sale',
+    'giao vien': 'teacher', gv: 'teacher',
+    'xem lich': 'viewer', xem: 'viewer',
+    'cho duyet': 'pending',
+  };
+  if (aliases[s]) return aliases[s];
+  var keys = Object.keys(ROLES);
+  for (var i = 0; i < keys.length; i++) {
+    if (s === keys[i] || s === removeDiacritics_(ROLES[keys[i]]).toLowerCase()) return keys[i];
+  }
+  return '';
+}
+
+function importUsers_(rows, args, user) {
+  var existing = {};
+  Db.read('users').forEach(function (u) { existing[normEmail(u.email)] = u; });
+  var seen = {};
+  var errors = [];
+  var inserts = [];
+  var updates = [];
+  rows.forEach(function (raw, i) {
+    var line = lineOf_(raw, i);
+    try {
+      var email = normEmail(raw.email);
+      if (!isAllowedEmail(email)) throw userError_('Email "' + str(raw.email) + '" không phải email @' + APP.ALLOWED_DOMAINS[0]);
+      if (seen[email]) throw userError_('Trùng email với dòng ' + seen[email]);
+      seen[email] = line;
+      if (isSuperAdmin(email)) throw userError_('Không thay đổi tài khoản quản trị gốc qua file nhập.');
+      var role = parseRole_(raw.role);
+      if (!role) throw userError_('Vai trò "' + raw.role + '" không hợp lệ (chọn: ' + USER_ROLE_OPTIONS.join(', ') + ')');
+      var old = existing[email];
+      if ((role === 'admin' || (old && old.role === 'admin')) && !user.isSuperAdmin) {
+        throw userError_('Chỉ quản trị gốc (' + APP.SUPER_ADMIN + ') được cấp/thu hồi quyền Admin.');
+      }
+      var active = str(raw.active) === '' ? true : toBool(raw.active, true);
+      if (old) {
+        updates.push({ _row: old._row, name: str(raw.name) || old.name, role: role, active: active });
+      } else {
+        inserts.push({ email: email, name: str(raw.name), role: role, active: active, addedBy: user.email, createdAt: nowString(), lastLogin: '' });
+      }
+    } catch (e) {
+      errors.push('Dòng ' + line + ': ' + e.message);
+    }
+  });
+  var res = { inserted: inserts.length, updated: updates.length, removed: 0, errors: errors, written: false };
+  if (!shouldWrite_(args, errors)) return res;
+  Db.update('users', updates);
+  Db.append('users', inserts);
+  res.written = true;
+  return res;
+}
 
 /* ======================= Export.gs ======================= */
 /**
@@ -2910,6 +3312,14 @@ function onOpen() {
     .addItem('Khởi tạo / kiểm tra cấu trúc bảng', 'setupSheets')
     .addItem('Nạp dữ liệu mẫu (XÓA dữ liệu hiện có)', 'menuLoadDemoData')
     .addToUi();
+}
+
+/**
+ * Trigger đơn giản: khi ai đó sửa trực tiếp trên Google Sheets thì xóa dữ liệu lưu tạm
+ * để ứng dụng web hiển thị ngay dữ liệu mới.
+ */
+function onEdit(e) {
+  try { CacheService.getScriptCache().remove('snap_meta'); } catch (err) { /* bỏ qua */ }
 }
 
 /**

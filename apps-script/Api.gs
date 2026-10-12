@@ -29,6 +29,8 @@ function dispatch_(action, args, token) {
 
   var user = resolveUser_(token);
   if (action === 'auth.me') return publicUser_(user);
+  // Khởi động: gộp "ai đang đăng nhập" + dữ liệu ban đầu vào 1 lần gọi.
+  if (action === 'app.start') return user.status === 'ok' ? bootstrap_(args, user) : { user: publicUser_(user) };
   if (user.status !== 'ok') throw userError_(authMessage_(user), 'AUTH');
 
   var def = ACTIONS[action];
@@ -534,27 +536,8 @@ function dataSave_(args, user) {
   if (!conf) throw userError_('Bảng không hợp lệ.');
   if (!hasPerm(user, conf.edit)) throw userError_('Bạn không có quyền sửa dữ liệu này.', 'FORBIDDEN');
   return withLock_(function () {
-    var input = args.record || {};
-    var rec = {};
-    TABLES[table].columns.forEach(function (c) {
-      if (!(c.key in input) || c.auto) return;
-      var v = input[c.key];
-      if (c.type === 'bool') v = toBool(v, c.def);
-      else if (c.type === 'number') { v = toNum(v); if (v === null) v = ''; }
-      else if (c.type === 'time') { var t = parseTime(v); if (str(v) && t === null) throw userError_(c.header + ': giờ không hợp lệ'); v = t === null ? '' : fmtTime(t); }
-      else if (c.type === 'weekday') { var w = parseWeekday(v); if (w < 0) throw userError_(c.header + ': thứ không hợp lệ'); v = weekdayLabel(w); }
-      else if (c.type === 'subjects') v = (Array.isArray(v) ? v : splitList(v)).map(function (x) { return str(x).toUpperCase(); }).join(', ');
-      else v = str(v);
-      if (CODE_FIELDS[c.key] && typeof v === 'string') v = v.toUpperCase();
-      if (c.key === 'email') v = normEmail(v);
-      if (c.required && (v === '' || v === null)) throw userError_('Thiếu thông tin bắt buộc: ' + c.header);
-      if (c.options && v && c.options.indexOf(v) < 0) throw userError_(c.header + ': giá trị "' + v + '" không hợp lệ');
-      rec[c.key] = v;
-    });
+    var rec = normalizeRecord_(table, args.record || {});
     validateRefs_(table, rec);
-    if (table === 'unavailability' && rec.start && rec.end && parseTime(rec.end) <= parseTime(rec.start)) {
-      throw userError_('Giờ kết thúc phải sau giờ bắt đầu.');
-    }
     var originalKey = str(args.originalKey);
     var newKey = Db.keyOf(table, Object.assign({}, rec, table === 'unavailability' ? { id: originalKey } : {}));
     var existing = originalKey ? Db.findByKey(table, originalKey) : null;
@@ -583,11 +566,58 @@ function dataSave_(args, user) {
   });
 }
 
-function validateRefs_(table, rec) {
-  if (rec.teacher !== undefined && rec.teacher && !Db.findByKey('teachers', rec.teacher)) throw userError_('Mã GV "' + rec.teacher + '" không tồn tại.');
-  if (rec.school !== undefined && rec.school && !Db.findByKey('schools', rec.school)) throw userError_('Mã trường "' + rec.school + '" không tồn tại.');
+/** Chuẩn hóa 1 bản ghi danh mục từ form / file Excel (chỉ các trường có trong input). */
+function normalizeRecord_(table, input) {
+  var rec = {};
+  TABLES[table].columns.forEach(function (c) {
+    if (!(c.key in input) || c.auto) return;
+    var v = input[c.key];
+    if (c.type === 'bool') v = toBool(v, c.def);
+    else if (c.type === 'number') {
+      if (str(v) && toNum(v) === null) throw userError_(c.header + ': "' + v + '" không phải là số');
+      v = toNum(v);
+      if (v === null) v = '';
+    } else if (c.type === 'time') {
+      var t = parseTime(v);
+      if (str(v) && t === null) throw userError_(c.header + ': giờ "' + v + '" không hợp lệ (vd. 07:30)');
+      v = t === null ? '' : fmtTime(t);
+    } else if (c.type === 'weekday') {
+      var w = parseWeekday(v);
+      if (w < 0) throw userError_(c.header + ': thứ "' + v + '" không hợp lệ (Thứ 2 … Thứ 7, Chủ nhật)');
+      v = weekdayLabel(w);
+    } else if (c.type === 'subjects') v = (Array.isArray(v) ? v : splitList(v)).map(function (x) { return str(x).toUpperCase(); }).join(', ');
+    else v = str(v);
+    if (CODE_FIELDS[c.key] && typeof v === 'string') v = v.toUpperCase();
+    if (c.key === 'email') v = normEmail(v);
+    if (c.required && (v === '' || v === null)) throw userError_('Thiếu thông tin bắt buộc: ' + c.header);
+    if (c.options && v) {
+      var match = c.options.filter(function (o) { return removeDiacritics_(o).toLowerCase() === removeDiacritics_(v).toLowerCase(); })[0];
+      if (!match) throw userError_(c.header + ': giá trị "' + v + '" không hợp lệ (chọn: ' + c.options.join(', ') + ')');
+      v = match;
+    }
+    rec[c.key] = v;
+  });
+  if (table === 'unavailability' && rec.start && rec.end && parseTime(rec.end) <= parseTime(rec.start)) {
+    throw userError_('Giờ kết thúc phải sau giờ bắt đầu.');
+  }
+  return rec;
+}
+
+/** Tập mã đang có (để kiểm tra tham chiếu nhanh khi nhập nhiều dòng). */
+function refSets_() {
+  var sets = { teachers: {}, schools: {}, subjects: {} };
+  Object.keys(sets).forEach(function (t) {
+    Db.read(t).forEach(function (r) { sets[t][str(r.code).toUpperCase()] = true; });
+  });
+  return sets;
+}
+
+function validateRefs_(table, rec, refs) {
+  refs = refs || refSets_();
+  if (rec.teacher !== undefined && rec.teacher && !refs.teachers[rec.teacher]) throw userError_('Mã GV "' + rec.teacher + '" không tồn tại.');
+  if (rec.school !== undefined && rec.school && !refs.schools[rec.school]) throw userError_('Mã trường "' + rec.school + '" không tồn tại.');
   if (table === 'teachers' && rec.subjects) {
-    var bad = splitList(rec.subjects).filter(function (c) { return !Db.findByKey('subjects', c); });
+    var bad = splitList(rec.subjects).filter(function (c) { return !refs.subjects[c]; });
     if (bad.length) throw userError_('Mã môn không tồn tại: ' + bad.join(', '));
   }
   if (table === 'teachers' && rec.email && !isAllowedEmail(rec.email)) throw userError_('Email GV phải là email @' + APP.ALLOWED_DOMAINS[0]);
@@ -777,6 +807,9 @@ var ACTIONS = {
       return rows.slice(-limit).reverse().map(function (r) { return { at: r.at, user: r.user, action: r.action, entity: r.entity, details: r.details }; });
     },
   },
+  'cache.refresh': { fn: function () { Db.invalidateSnapshot(); return { ok: true }; } },
+  'import.spec': { fn: function (a, u) { return importSpec_(a, u); } },
+  'import.data': { fn: function (a, u) { return importData_(a, u); } },
   'export.sheet': { perm: 'export', fn: function (a, u) { return exportToSpreadsheet_(u); } },
   'email.schedules': { perm: 'send_email', fn: function (a, u) { return emailSchedules_(u, a.teachers || []); } },
 };

@@ -11,7 +11,7 @@ const path = require('path');
 const SRC = path.join(__dirname, '..', 'apps-script');
 const DIST = path.join(__dirname, '..', 'dist');
 // Thứ tự gộp: cấu hình → tiện ích → dữ liệu → thuật toán → API → giao diện.
-const ORDER = ['Config', 'Utils', 'Db', 'Scheduler', 'Conflicts', 'Auth', 'Api', 'Export', 'Setup', 'WebApp'];
+const ORDER = ['Config', 'Utils', 'Db', 'Scheduler', 'Conflicts', 'Auth', 'Api', 'Import', 'Export', 'Setup', 'WebApp'];
 
 function build() {
   const files = fs.readdirSync(SRC);

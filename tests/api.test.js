@@ -366,3 +366,94 @@ test('dòng checkbox FALSE thừa không làm lệch vị trí thêm dòng', () 
   assert.equal(rows.length, before + 1);
   assert.equal(rows[rows.length - 1]._row, before + 2, 'dòng mới nằm ngay sau dữ liệu');
 });
+
+test('nhập dữ liệu hàng loạt từ Excel: kiểm tra, thêm/cập nhật, thay thế', () => {
+  const { call, ctx } = fresh();
+  const AC = 'scheduler@kdi.edu.vn';
+  const spec = call(AC, 'import.spec').data;
+  assert.deepEqual(spec.map((s) => s.table), ['subjects', 'schools', 'teachers', 'links', 'unavailability', 'lessons']);
+  assert.ok(spec.every((s) => s.examples.length && s.examples[0].length === s.columns.length));
+  assert.ok(call(SUPER, 'import.spec').data.some((s) => s.table === 'users'));
+  assert.equal(call('sale@kdi.edu.vn', 'import.spec').data.map((s) => s.table).join(','), 'schools,lessons');
+
+  // GV: 1 dòng mới, 1 dòng cập nhật, 1 dòng lỗi → mặc định không ghi gì.
+  const rows = [
+    { _line: 2, code: 'GV500', name: 'GV Mới', type: 'kiem nhiem', rating: 'a', subjects: 'RB, SCR', email: 'gv.moi@kdi.edu.vn' },
+    { _line: 3, code: 'GV001', name: 'Tên Mới GV001', type: 'Thường', subjects: 'RB' },
+    { _line: 4, code: 'GV501', name: 'Lỗi', subjects: 'XYZ' },
+  ];
+  const dry = call(AC, 'import.data', { table: 'teachers', rows, mode: 'upsert' }).data;
+  assert.equal(dry.written, false);
+  assert.equal(dry.inserted, 1);
+  assert.equal(dry.updated, 1);
+  assert.deepEqual(dry.errors.length, 1);
+  assert.match(dry.errors[0], /^Dòng 4: .*XYZ/);
+  const ok = call(AC, 'import.data', { table: 'teachers', rows, mode: 'upsert', skipErrors: true }).data;
+  assert.equal(ok.written, true);
+  const teachers = call(AC, 'data.list', { table: 'teachers' }).data.rows;
+  const t500 = teachers.find((t) => t.code === 'GV500');
+  assert.equal(t500.type, 'Kiêm nhiệm');
+  assert.equal(t500.rating, 'A');
+  assert.equal(t500.active, true);
+  const t1 = teachers.find((t) => t.code === 'GV001');
+  assert.equal(t1.name, 'Tên Mới GV001');
+  assert.ok(t1.phone, 'cột không có trong file được giữ nguyên');
+
+  // Trùng mã trong file.
+  const dup = call(AC, 'import.data', { table: 'subjects', rows: [{ code: 'ST', name: 'A' }, { code: 'st', name: 'B' }] }).data;
+  assert.match(dup.errors[0], /Trùng mã/);
+
+  // TKB: thay thế TKB của các trường có trong file, gán GV khi có quyền.
+  const before = call(AC, 'lessons.list').data;
+  const tr3 = before.filter((l) => l.school === 'TR003').length;
+  const tkb = call(AC, 'import.data', { table: 'lessons', mode: 'replace', rows: [
+    { school: 'TR003', weekday: 'Thứ 2', start: '7:30', end: '8:15', className: '5A1', subject: 'RB', teacher: 'GV002' },
+    { school: 'TR003', weekday: 'Thứ 3', start: '07:30', end: '08:15', className: '5A2', subject: 'Robotics' },
+  ] }).data;
+  assert.equal(tkb.written, true, JSON.stringify(tkb.errors));
+  assert.equal(tkb.removed, tr3);
+  const after = call(AC, 'lessons.list').data;
+  assert.equal(after.length, before.length - tr3 + 2);
+  assert.equal(after.filter((l) => l.school === 'TR003' && l.teacher === 'GV002').length, 1);
+  // Sale không được gán GV qua file.
+  const saleTkb = call('sale@kdi.edu.vn', 'import.data', { table: 'lessons', rows: [{ school: 'TR004', weekday: 'Thứ 2', start: '07:30', end: '08:15', subject: 'RB', teacher: 'GV002' }] }).data;
+  assert.match(saleTkb.errors[0], /không có quyền phân công/);
+  assert.equal(call('sale@kdi.edu.vn', 'import.data', { table: 'teachers', rows }).code, 'FORBIDDEN');
+
+  // Tài khoản: chỉ quản trị gốc cấp Admin.
+  const users = [{ email: 'a1@kdi.edu.vn', name: 'A1', role: 'AC' }, { email: 'a2@kdi.edu.vn', role: 'Xem lịch' }, { email: 'boss@kdi.edu.vn', role: 'Admin' }, { email: 'x@gmail.com', role: 'Sale' }];
+  const admin2 = call(SUPER, 'users.save', { user: { email: 'admin2@kdi.edu.vn', role: 'admin' } });
+  assert.equal(admin2.ok, true);
+  const byAdmin2 = call('admin2@kdi.edu.vn', 'import.data', { table: 'users', rows: users, skipErrors: true }).data;
+  assert.equal(byAdmin2.errors.length, 2);
+  assert.equal(byAdmin2.inserted, 2);
+  const list = call(SUPER, 'users.list').data;
+  assert.equal(list.find((u) => u.email === 'a1@kdi.edu.vn').role, 'scheduler');
+  assert.equal(list.find((u) => u.email === 'a2@kdi.edu.vn').role, 'viewer');
+  assert.ok(!list.some((u) => u.email === 'boss@kdi.edu.vn'));
+  ctx.Db.clearCache();
+});
+
+test('dữ liệu lưu tạm: đọc nhanh nhưng luôn mới sau khi ghi', () => {
+  const { call, ctx, env } = fresh();
+  const AC = 'scheduler@kdi.edu.vn';
+  call(AC, 'dashboard');
+  assert.ok(env.cache.has('snap_meta'), 'đã lưu ảnh chụp dữ liệu');
+  // Đọc lần sau không cần đọc sheet: làm hỏng sheet tạm thời vẫn đọc được từ cache.
+  const sh = ctx.Db.sheet('schools', false);
+  const saved = sh.rows;
+  sh.rows = [saved[0]];
+  assert.equal(call(AC, 'overview.lists').data.schools.length, 72);
+  sh.rows = saved;
+  // Ghi qua hệ thống → ảnh chụp bị xóa, lần đọc sau thấy dữ liệu mới.
+  assert.equal(call('sale@kdi.edu.vn', 'data.save', { table: 'schools', record: { code: 'TR901', name: 'TH Mới' } }).ok, true);
+  assert.equal(call(AC, 'overview.lists').data.schools.length, 73);
+  // Sửa tay trên Sheets → onEdit xóa ảnh chụp.
+  ctx.onEdit({});
+  assert.ok(!env.cache.has('snap_meta'));
+  // Khởi động gộp 1 lần gọi.
+  const start = call(AC, 'app.start').data;
+  assert.equal(start.user.status, 'ok');
+  assert.ok(start.lookups.schools.length >= 73);
+  assert.equal(call('x@gmail.com', 'app.start').data.user.status, 'forbidden');
+});

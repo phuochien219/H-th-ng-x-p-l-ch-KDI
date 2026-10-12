@@ -136,16 +136,18 @@ function lessonsCsv(filename, lessons) {
 }
 
 /* ------------------------- Dữ liệu dùng chung (cache) ------------------------- */
+/** Lưu kết quả (dạng promise) để nhiều chỗ cùng cần dữ liệu chỉ gọi máy chủ 1 lần. */
 function cached(key, loader) {
-  if (App.cache[key]) return Promise.resolve(App.cache[key]);
-  return loader().then(function (d) { App.cache[key] = d; return d; });
+  if (!App.cache[key]) {
+    App.cache[key] = loader().catch(function (e) { delete App.cache[key]; throw e; });
+  }
+  return App.cache[key];
 }
 /** Gọi sau khi dữ liệu thay đổi. */
 function invalidate() { App.cache = {}; refreshBadge(); }
 function refreshBadge() {
   if (!can('view_schedule')) return;
-  call('overview.lists').then(function (d) {
-    App.cache.lists = d;
+  cached('lists', function () { return call('overview.lists'); }).then(function (d) {
     var n = d.teachers.reduce(function (s, t) { return s + t.conflicts; }, 0);
     var el = $('#nav-conflicts .count');
     if (el) { el.textContent = n; el.style.display = n ? '' : 'none'; }
@@ -190,7 +192,7 @@ var NAV = [
     ['dashboard', '📊', 'Tổng quan'], ['teachers', '👩‍🏫', 'Lịch theo giáo viên'], ['schools', '🏫', 'Lịch theo trường'],
     ['free', '🕒', 'Lịch trống GV'], ['conflicts', '⚠️', 'Cảnh báo trùng lịch'], ['me', '🙋', 'Lịch dạy của tôi'],
   ] },
-  { group: 'Điều phối', items: [['lessons', '📅', 'Thời khóa biểu STEM'], ['auto', '🤖', 'Xếp lịch tự động'], ['data', '🗂️', 'Danh mục dữ liệu']] },
+  { group: 'Điều phối', items: [['lessons', '📅', 'Thời khóa biểu STEM'], ['auto', '🤖', 'Xếp lịch tự động'], ['data', '🗂️', 'Danh mục dữ liệu'], ['import', '📥', 'Nhập dữ liệu từ Excel']] },
   { group: 'Quản trị', items: [['users', '🔐', 'Người dùng & phân quyền'], ['settings', '⚙️', 'Cấu hình xếp lịch'], ['audit', '📝', 'Nhật ký thao tác']] },
 ];
 
@@ -208,6 +210,7 @@ function renderShell() {
     '<header class="topbar"><button class="menu-toggle" id="menu-toggle" aria-label="Menu">☰</button>' +
     '<div class="brand"><span class="logo">K</span><span>KDI Scheduler</span></div><div class="spacer"></div>' +
     '<div class="who"><div>' + esc(u.name || u.email) + '</div><small>' + esc(u.email) + ' · ' + esc(u.roleLabel) + '</small></div>' +
+    '<button class="btn sm btn-ghost" id="refresh" title="Tải lại dữ liệu mới nhất từ Google Sheets">⟳ Làm mới</button>' +
     (u.via === 'otp' ? '<button class="btn sm btn-ghost" id="logout">Đăng xuất</button>' : '') + '</header>' +
     '<div class="layout"><nav class="sidebar">' + nav + '<div class="group">Phiên bản ' + esc(App.boot.app.version) + '</div></nav>' +
     '<main class="main" id="main"></main></div>';
@@ -215,6 +218,12 @@ function renderShell() {
     a.onclick = function (e) { e.preventDefault(); navigate(a.getAttribute('data-route')); };
   });
   $('#menu-toggle').onclick = function () { document.body.classList.toggle('nav-open'); };
+  $('#refresh').onclick = function () {
+    busy(this, call('cache.refresh')).then(function () {
+      invalidate();
+      return reloadLookups();
+    }).then(function () { renderRoute(); toast('Đã tải dữ liệu mới nhất', 'ok'); }).catch(showError);
+  };
   var lo = $('#logout');
   if (lo) lo.onclick = function () { call('auth.logout').catch(function () {}); setToken(''); location.reload(); };
 }
@@ -275,15 +284,14 @@ function onAuthLost(message) {
 /* ------------------------------ Khởi động ------------------------------ */
 function start() {
   App.authLost = false;
-  call('auth.me').then(function (me) {
-    if (me.status !== 'ok') { renderLogin(me); return null; }
-    return call('bootstrap').then(function (boot) {
-      App.boot = boot;
-      App.user = boot.user;
-      renderShell();
-      initRouter();
-      refreshBadge();
-    });
+  // 1 lần gọi duy nhất: kiểm tra đăng nhập + tải dữ liệu ban đầu.
+  call('app.start').then(function (boot) {
+    if (boot.user.status !== 'ok') { renderLogin(boot.user); return; }
+    App.boot = boot;
+    App.user = boot.user;
+    renderShell();
+    initRouter();
+    refreshBadge();
   }).catch(function (e) {
     $('#app').innerHTML = '<div class="login-wrap"><div class="login"><h1>KDI Scheduler</h1><div class="alert err">' + esc(e.message) + '</div>' +
       '<button class="btn" onclick="location.reload()">Thử lại</button></div></div>';

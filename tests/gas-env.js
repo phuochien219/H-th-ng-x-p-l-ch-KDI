@@ -231,6 +231,13 @@ function createGasEnv(opts) {
       getScriptCache: () => ({
         get: (k) => (env.cache.has(k) ? env.cache.get(k) : null),
         put: (k, v) => { env.cache.set(k, String(v)); },
+        getAll: (keys) => { const o = {}; keys.forEach((k) => { if (env.cache.has(k)) o[k] = env.cache.get(k); }); return o; },
+        putAll: (map) => {
+          Object.keys(map).forEach((k) => {
+            if (Buffer.byteLength(String(map[k]), 'utf8') > 100 * 1024) throw new Error('Argument too large: value');
+            env.cache.set(k, String(map[k]));
+          });
+        },
         remove: (k) => { env.cache.delete(k); },
       }),
     },
