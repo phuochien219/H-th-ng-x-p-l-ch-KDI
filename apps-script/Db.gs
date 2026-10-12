@@ -1,0 +1,355 @@
+/**
+ * Lớp truy cập dữ liệu: mỗi "bảng" là một sheet trong Google Sheets, dòng 1 là tiêu đề.
+ * Cột được nhận diện theo TÊN TIÊU ĐỀ nên người dùng có thể đổi thứ tự cột hoặc
+ * thêm cột ghi chú riêng mà không làm hỏng hệ thống.
+ */
+
+var Db = (function () {
+  var cache = {};
+
+  function ss() {
+    var active = null;
+    try { active = SpreadsheetApp.getActiveSpreadsheet(); } catch (e) { active = null; }
+    if (active) return active;
+    var id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+    if (!id) throw new Error('Chưa cấu hình SPREADSHEET_ID (Project Settings → Script properties).');
+    return SpreadsheetApp.openById(id);
+  }
+
+  function def(table) {
+    var d = TABLES[table];
+    if (!d) throw new Error('Không có bảng: ' + table);
+    return d;
+  }
+
+  function sheet(table, create) {
+    var d = def(table);
+    var sh = ss().getSheetByName(d.sheet);
+    if (!sh && create) {
+      sh = ss().insertSheet(d.sheet);
+      ensureHeaders_(table, sh);
+    }
+    return sh;
+  }
+
+  /** Đảm bảo đủ tiêu đề cột; thêm cột thiếu vào cuối. */
+  function ensureHeaders_(table, sh) {
+    var d = def(table);
+    var lastCol = sh.getLastColumn();
+    var headers = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0].map(str) : [];
+    var added = false;
+    d.columns.forEach(function (c) {
+      if (headers.indexOf(c.header) < 0) {
+        headers.push(c.header);
+        added = true;
+      }
+    });
+    if (headers.length > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
+    if (added || lastCol === 0) {
+      sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground('#1f3b73').setFontColor('#ffffff');
+      sh.setFrozenRows(1);
+    }
+    d.columns.forEach(function (c) {
+      if (TEXT_COLUMNS[c.type]) {
+        var col = headers.indexOf(c.header) + 1;
+        sh.getRange(1, col, sh.getMaxRows(), 1).setNumberFormat('@');
+      }
+    });
+    delete cache[table];
+    return headers;
+  }
+
+  /** Đọc toàn bộ bảng (có cache trong 1 lần thực thi). */
+  function load(table) {
+    if (cache[table]) return cache[table];
+    var d = def(table);
+    var sh = sheet(table, false);
+    var entry = { sheet: sh, header: [], col: {}, grid: [], rows: null };
+    if (sh) {
+      var lastRow = sh.getLastRow();
+      var lastCol = sh.getLastColumn();
+      if (lastRow >= 1 && lastCol >= 1) {
+        entry.grid = sh.getRange(1, 1, lastRow, lastCol).getValues();
+        entry.header = entry.grid[0].map(str);
+      }
+    }
+    d.columns.forEach(function (c) {
+      entry.col[c.key] = entry.header.indexOf(c.header);
+    });
+    cache[table] = entry;
+    return entry;
+  }
+
+  function rowToObj_(table, entry, r) {
+    var d = def(table);
+    var row = entry.grid[r];
+    var o = { _row: r + 1 };
+    d.columns.forEach(function (c) {
+      var i = entry.col[c.key];
+      var v = i >= 0 ? row[i] : '';
+      if (c.type === 'bool') v = toBool(v, c.def === undefined ? false : c.def);
+      else v = cellToPlain_(v);
+      if (typeof v === 'string') v = v.trim();
+      o[c.key] = v;
+    });
+    return o;
+  }
+
+  function isBlankRow_(row) {
+    for (var i = 0; i < row.length; i++) {
+      if (row[i] !== '' && row[i] !== null && row[i] !== false) return false;
+    }
+    return true;
+  }
+
+  /** Danh sách đối tượng của bảng (bỏ dòng trống). */
+  function read(table) {
+    var entry = load(table);
+    if (!entry.rows) {
+      var out = [];
+      for (var r = 1; r < entry.grid.length; r++) {
+        if (isBlankRow_(entry.grid[r])) continue;
+        out.push(rowToObj_(table, entry, r));
+      }
+      entry.rows = out;
+    }
+    return entry.rows.map(function (o) { return Object.assign({}, o); });
+  }
+
+  function valueForCell_(c, v) {
+    if (v === undefined || v === null) return '';
+    if (c.type === 'bool') return !!v;
+    if (c.type === 'time' && typeof v === 'number') return fmtTime(v);
+    if (c.type === 'weekday' && typeof v === 'number') return weekdayLabel(v);
+    return v;
+  }
+
+  function buildRow_(table, entry, obj, baseRow) {
+    var d = def(table);
+    var width = Math.max(entry.header.length, 1);
+    var row = baseRow ? baseRow.slice() : new Array(width).fill('');
+    while (row.length < width) row.push('');
+    d.columns.forEach(function (c) {
+      var i = entry.col[c.key];
+      if (i < 0 || !(c.key in obj)) return;
+      row[i] = valueForCell_(c, obj[c.key]);
+    });
+    return row;
+  }
+
+  function prepare_(table) {
+    var sh = sheet(table, true);
+    var entry = load(table);
+    var missing = def(table).columns.some(function (c) { return entry.col[c.key] < 0; });
+    if (missing) {
+      ensureHeaders_(table, sh);
+      entry = load(table);
+    }
+    return entry;
+  }
+
+  /** Thêm nhiều dòng. */
+  function append(table, objs) {
+    if (!objs || !objs.length) return;
+    var entry = prepare_(table);
+    var rows = objs.map(function (o) { return buildRow_(table, entry, o, null); });
+    var sh = entry.sheet;
+    var start = Math.max(sh.getLastRow(), 1) + 1;
+    var lastNeeded = start + rows.length - 1;
+    if (lastNeeded > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), lastNeeded - sh.getMaxRows());
+    def(table).columns.forEach(function (c) {
+      if (TEXT_COLUMNS[c.type] && entry.col[c.key] >= 0) sh.getRange(start, entry.col[c.key] + 1, rows.length, 1).setNumberFormat('@');
+    });
+    sh.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
+    delete cache[table];
+  }
+
+  /**
+   * Cập nhật các dòng đã có. Mỗi phần tử cần `_row` (số dòng trong sheet) và các
+   * trường cần đổi. Cột ngoài schema được giữ nguyên.
+   */
+  function update(table, items) {
+    if (!items || !items.length) return;
+    var entry = prepare_(table);
+    var d = def(table);
+    var touchedCols = {};
+    items.forEach(function (it) {
+      var r = it._row - 1;
+      if (r < 1 || r >= entry.grid.length) throw new Error('Dòng không hợp lệ: ' + it._row);
+      entry.grid[r] = buildRow_(table, entry, it, entry.grid[r]);
+      d.columns.forEach(function (c) {
+        if (c.key in it && entry.col[c.key] >= 0) touchedCols[entry.col[c.key]] = true;
+      });
+    });
+    var width = entry.header.length;
+    if (items.length <= 10) {
+      items.forEach(function (it) {
+        entry.sheet.getRange(it._row, 1, 1, width).setValues([entry.grid[it._row - 1].slice(0, width)]);
+      });
+    } else {
+      var n = entry.grid.length - 1;
+      Object.keys(touchedCols).forEach(function (ci) {
+        ci = Number(ci);
+        var colValues = [];
+        for (var r = 1; r <= n; r++) colValues.push([entry.grid[r][ci] === undefined ? '' : entry.grid[r][ci]]);
+        entry.sheet.getRange(2, ci + 1, n, 1).setValues(colValues);
+      });
+    }
+    entry.rows = null;
+  }
+
+  /** Xóa các dòng theo số dòng sheet. */
+  function remove(table, rowNumbers) {
+    if (!rowNumbers || !rowNumbers.length) return;
+    var sh = sheet(table, false);
+    if (!sh) return;
+    // Sheets không cho xóa hết các dòng không cố định → chừa lại 1 dòng trống.
+    if (sh.getMaxRows() - rowNumbers.length <= 1) sh.insertRowsAfter(sh.getMaxRows(), 1);
+    var sorted = rowNumbers.slice().sort(function (a, b) { return b - a; });
+    // Gộp các dòng liền nhau để xóa nhanh hơn.
+    var i = 0;
+    while (i < sorted.length) {
+      var end = sorted[i];
+      var start = end;
+      while (i + 1 < sorted.length && sorted[i + 1] === start - 1) {
+        i++;
+        start = sorted[i];
+      }
+      sh.deleteRows(start, end - start + 1);
+      i++;
+    }
+    delete cache[table];
+  }
+
+  /** Ghi đè toàn bộ dữ liệu của bảng (dùng cho dữ liệu mẫu / bảng log). */
+  function replaceAll(table, objs) {
+    var sh = sheet(table, true);
+    var lastRow = sh.getLastRow();
+    if (lastRow > 1) sh.getRange(2, 1, lastRow - 1, Math.max(sh.getLastColumn(), 1)).clearContent();
+    delete cache[table];
+    append(table, objs);
+  }
+
+  function keyOf(table, obj) {
+    var k = def(table).key;
+    if (Array.isArray(k)) return k.map(function (x) { return str(obj[x]).toUpperCase(); }).join('|');
+    if (k === 'email') return normEmail(obj[k]);
+    return str(obj[k]);
+  }
+
+  function findByKey(table, key) {
+    var rows = read(table);
+    for (var i = 0; i < rows.length; i++) if (keyOf(table, rows[i]) === key) return rows[i];
+    return null;
+  }
+
+  function clearCache() {
+    cache = {};
+  }
+
+  return {
+    ss: ss,
+    sheet: sheet,
+    ensureHeaders: function (table) { return ensureHeaders_(table, sheet(table, true)); },
+    read: read,
+    append: append,
+    update: update,
+    remove: remove,
+    replaceAll: replaceAll,
+    keyOf: keyOf,
+    findByKey: findByKey,
+    clearCache: clearCache,
+  };
+})();
+
+/** Đọc cấu hình (sheet CauHinh) + giá trị mặc định. */
+function getSettings() {
+  var out = {};
+  SETTINGS_SPEC.forEach(function (s) { out[s.key] = s.def; });
+  var rows = [];
+  try { rows = Db.read('settings'); } catch (e) { rows = []; }
+  var specByKey = {};
+  SETTINGS_SPEC.forEach(function (s) { specByKey[s.key] = s; });
+  rows.forEach(function (r) {
+    var spec = specByKey[r.key];
+    if (!spec || r.value === '' || r.value === null) return;
+    out[r.key] = coerceSetting_(spec, r.value);
+  });
+  return out;
+}
+
+function coerceSetting_(spec, v) {
+  if (spec.type === 'number') {
+    var n = toNum(v);
+    return n === null ? spec.def : n;
+  }
+  if (spec.type === 'bool') return toBool(v, spec.def);
+  if (spec.type === 'time') {
+    var t = parseTime(v);
+    return t === null ? spec.def : fmtTime(t);
+  }
+  if (spec.type === 'select') {
+    var ok = spec.options.some(function (o) { return o[0] === String(v); });
+    return ok ? String(v) : spec.def;
+  }
+  return String(v);
+}
+
+function saveSettings(values) {
+  var rows = Db.read('settings');
+  var byKey = {};
+  rows.forEach(function (r) { byKey[r.key] = r; });
+  var updates = [];
+  var inserts = [];
+  SETTINGS_SPEC.forEach(function (spec) {
+    if (!(spec.key in values)) return;
+    var v = coerceSetting_(spec, values[spec.key]);
+    if (byKey[spec.key]) updates.push({ _row: byKey[spec.key]._row, value: v, description: spec.label });
+    else inserts.push({ key: spec.key, value: v, description: spec.label });
+  });
+  Db.update('settings', updates);
+  Db.append('settings', inserts);
+}
+
+/** Sinh ID tăng dần dạng PREFIX-000123. */
+function nextIds_(table, prefix, count) {
+  var max = 0;
+  var re = new RegExp('^' + prefix + '-(\\d+)$');
+  Db.read(table).forEach(function (r) {
+    var m = str(r.id).match(re);
+    if (m) max = Math.max(max, Number(m[1]));
+  });
+  var out = [];
+  for (var i = 1; i <= count; i++) {
+    var n = String(max + i);
+    while (n.length < 6) n = '0' + n;
+    out.push(prefix + '-' + n);
+  }
+  return out;
+}
+
+function audit_(user, action, entity, details) {
+  try {
+    Db.append('audit', [{
+      at: nowString(),
+      user: user && user.email ? user.email : String(user || 'system'),
+      action: action,
+      entity: entity || '',
+      details: typeof details === 'string' ? details : JSON.stringify(details || ''),
+    }]);
+  } catch (e) {
+    console.error('Không ghi được nhật ký: ' + e);
+  }
+}
+
+/** Chạy hàm trong khóa toàn script để tránh 2 người ghi đè nhau. */
+function withLock_(fn) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('Hệ thống đang bận (người khác đang cập nhật). Vui lòng thử lại sau ít giây.');
+  try {
+    Db.clearCache();
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
