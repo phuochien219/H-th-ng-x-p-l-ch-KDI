@@ -736,7 +736,10 @@ var Db = (function () {
   /** Danh sách đối tượng của bảng (bỏ dòng trống) – dùng ảnh chụp nếu có thể. */
   function read(table) {
     if (!fresh && SNAPSHOT_TABLES.indexOf(table) >= 0) {
-      return snapshot_()[table].map(function (o) { return Object.assign({}, o); });
+      var snap = snapshot_();
+      // Ảnh chụp cũ (từ phiên bản trước) có thể thiếu bảng mới → tạo lại.
+      if (!snap[table]) { invalidateSnapshot(); snap = snapshot_(); }
+      return (snap[table] || readSheet_(table)).map(function (o) { return Object.assign({}, o); });
     }
     return readSheet_(table);
   }
